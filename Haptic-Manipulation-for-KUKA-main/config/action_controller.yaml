@@ -1,0 +1,14 @@
+# 动作控制器配置文件
+
+action_controller:
+  ros__parameters:
+    # 安全限制
+    max_position_change: 0.001  # 最大单步位置变化 (m)，防止突然大幅移动
+    
+    # 工作空间限制 (m)
+    workspace_x_min: 0.2
+    workspace_x_max: 0.8
+    workspace_y_min: -0.5
+    workspace_y_max: 0.5
+    workspace_z_min: 0.1
+    workspace_z_max: 0.8

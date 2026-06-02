@@ -1,0 +1,137 @@
+{
+  "dataset_name": "tactile_blind_manipulation",
+  "description": "触觉盲操作数据集 - HDF5格式",
+  "version": "1.0",
+  "sampling_frequency": 50.0,
+  "total_episodes": 449,
+  "total_frames": 136079,
+  "categories": {
+    "cir_lar": "大圆形插孔",
+    "cir_med": "中圆形插孔",
+    "cir_sma": "小圆形插孔",
+    "rect_lar": "大矩形插孔",
+    "rect_med": "中矩形插孔",
+    "rect_sma": "小矩形插孔",
+    "tri_lar": "大三角形插孔",
+    "tri_med": "中三角形插孔",
+    "tri_sma": "小三角形插孔"
+  },
+  "category_stats": {
+    "cir_lar": {
+      "episodes": 50,
+      "frames": 13829,
+      "description": "大圆形插孔"
+    },
+    "cir_med": {
+      "episodes": 49,
+      "frames": 14798,
+      "description": "中圆形插孔"
+    },
+    "cir_sma": {
+      "episodes": 50,
+      "frames": 14286,
+      "description": "小圆形插孔"
+    },
+    "rect_lar": {
+      "episodes": 50,
+      "frames": 15965,
+      "description": "大矩形插孔"
+    },
+    "rect_med": {
+      "episodes": 50,
+      "frames": 15304,
+      "description": "中矩形插孔"
+    },
+    "rect_sma": {
+      "episodes": 50,
+      "frames": 16044,
+      "description": "小矩形插孔"
+    },
+    "tri_lar": {
+      "episodes": 50,
+      "frames": 16453,
+      "description": "大三角形插孔"
+    },
+    "tri_med": {
+      "episodes": 50,
+      "frames": 14094,
+      "description": "中三角形插孔"
+    },
+    "tri_sma": {
+      "episodes": 50,
+      "frames": 15306,
+      "description": "小三角形插孔"
+    }
+  },
+  "data_format": {
+    "observation": {
+      "end_position": {
+        "shape": "(3,)",
+        "type": "float64",
+        "description": "末端位置 (x,y,z)"
+      },
+      "end_quaternion": {
+        "shape": "(4,)",
+        "type": "float64",
+        "description": "末端四元数 (x,y,z,w)"
+      },
+      "end_position_delta": {
+        "shape": "(3,)",
+        "type": "float64",
+        "description": "末端位置增量"
+      },
+      "end_quaternion_delta": {
+        "shape": "(4,)",
+        "type": "float64",
+        "description": "末端四元数增量"
+      },
+      "joints": {
+        "shape": "(7,)",
+        "type": "float64",
+        "description": "关节角度 (rad)"
+      },
+      "forces_l": {
+        "shape": "(3, 20, 20)",
+        "type": "float64",
+        "description": "左手触觉力阵列"
+      },
+      "forces_r": {
+        "shape": "(3, 20, 20)",
+        "type": "float64",
+        "description": "右手触觉力阵列"
+      },
+      "resultant_force_l": {
+        "shape": "(3,)",
+        "type": "float64",
+        "description": "左手合力"
+      },
+      "resultant_force_r": {
+        "shape": "(3,)",
+        "type": "float64",
+        "description": "右手合力"
+      },
+      "resultant_moment_l": {
+        "shape": "(3,)",
+        "type": "float64",
+        "description": "左手合力矩"
+      },
+      "resultant_moment_r": {
+        "shape": "(3,)",
+        "type": "float64",
+        "description": "右手合力矩"
+      }
+    },
+    "action": {
+      "position": {
+        "shape": "(3,)",
+        "type": "float64",
+        "description": "下一时刻位置动作"
+      },
+      "quaternion": {
+        "shape": "(4,)",
+        "type": "float64",
+        "description": "下一时刻旋转动作"
+      }
+    }
+  }
+}

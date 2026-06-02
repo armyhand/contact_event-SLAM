@@ -1,0 +1,141 @@
+_wandb:
+    value:
+        cli_version: 0.21.1
+        e:
+            mjefp7434wegyqqei4n3snnbzjp47dhv:
+                codePath: train_feature_lstm.py
+                codePathLocal: train_feature_lstm.py
+                cpu_count: 192
+                cpu_count_logical: 64
+                cudaVersion: "12.8"
+                disk:
+                    /:
+                        total: "497906614272"
+                        used: "156115927040"
+                email: lyj6626076@gmail.com
+                executable: /home/ubuntu/anaconda3/envs/TacIL/bin/python
+                git:
+                    commit: 6eb3b2ca6c4f19826daac66b12c6534fe37dc667
+                    remote: git@github.com:pb-lyj/Tactile_blind_manipulation.git
+                gpu: NVIDIA GeForce RTX 4090
+                gpu_count: 4
+                gpu_nvidia:
+                    - architecture: Ada
+                      cudaCores: 16384
+                      memoryTotal: "51527024640"
+                      name: NVIDIA GeForce RTX 4090
+                      uuid: GPU-dc47580a-bba9-39de-9535-8e3eae0b1583
+                    - architecture: Ada
+                      cudaCores: 16384
+                      memoryTotal: "51527024640"
+                      name: NVIDIA GeForce RTX 4090
+                      uuid: GPU-a39a3ef2-4f01-54f0-b1a2-ffccd97051e2
+                    - architecture: Ada
+                      cudaCores: 16384
+                      memoryTotal: "51527024640"
+                      name: NVIDIA GeForce RTX 4090
+                      uuid: GPU-65b2d39c-0b73-924c-6fe8-37d445092201
+                    - architecture: Ada
+                      cudaCores: 16384
+                      memoryTotal: "51527024640"
+                      name: NVIDIA GeForce RTX 4090
+                      uuid: GPU-72c5707e-ba73-2333-8ca2-a036299fde2e
+                host: lzh03Jammy
+                memory:
+                    total: "96000000000"
+                os: Linux-6.8.0-85-generic-x86_64-with-glibc2.35
+                program: /home/ubuntu/lyj/Probefahrt/train_feature_lstm.py
+                python: CPython 3.11.14
+                root: /home/ubuntu/lyj/Probefahrt/checkpoints/feature_lstm_policy_20251120_013008
+                startedAt: "2025-11-20T01:30:10.340331Z"
+                writerId: mjefp7434wegyqqei4n3snnbzjp47dhv
+        m: []
+        python_version: 3.11.14
+        t:
+            "1":
+                - 1
+            "2":
+                - 1
+            "3":
+                - 2
+                - 3
+                - 13
+                - 15
+                - 16
+                - 61
+            "4": 3.11.14
+            "5": 0.21.1
+            "12": 0.21.1
+            "13": linux-x86_64
+computed_normalization_params:
+    value:
+        actions:
+            axis_mode: global
+            method: zscore
+            params:
+                mean: 0.2852418616181861
+                std: 0.24002930042473217
+        forces:
+            method: zscore
+            params:
+                mean: -0.011877792381470331
+                std: 0.04020631541197512
+data:
+    value:
+        categories:
+            - cir_lar
+            - cir_med
+            - cir_sma
+            - rect_lar
+            - rect_med
+            - rect_sma
+            - tri_lar
+            - tri_med
+            - tri_sma
+        data_root: /home/ubuntu/lyj/Probefahrt/data25.7_aligned
+        normalization_config:
+            actions:
+                axis_mode: global
+                method: zscore
+                params:
+                    mean: 0.2852418616181861
+                    std: 0.24002930042473217
+            forces:
+                method: zscore
+                params:
+                    mean: -0.011877792381470331
+                    std: 0.04020631541197512
+        overlap_stride: 1
+        sampling_interval: 5
+        sequence_length: 8
+model:
+    value:
+        action_dim: 3
+        action_embed_dim: 64
+        dropout_rate: 0.2
+        fc_hidden_dims:
+            - 256
+            - 128
+            - 64
+        feature_dim: 128
+        lstm_hidden_dim: 256
+        lstm_num_layers: 2
+        pretrained_encoder_path: /home/ubuntu/lyj/Probefahrt/cnnae_crt_128.pt
+normalization_computed_at_runtime:
+    value: true
+output:
+    value:
+        output_dir: /home/ubuntu/lyj/Probefahrt/checkpoints
+training:
+    value:
+        batch_size: 24
+        dense_supervision: true
+        epochs: 15
+        eval_every: 1
+        lr: 0.0005
+        save_every: 10
+        weight_decay: 1e-05
+wandb:
+    value:
+        name: feature-lstm-delta_policy-AIDO-Div0.1decay0-LargeStep
+        project: tactile-action-learn-test
