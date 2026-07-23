@@ -1810,10 +1810,10 @@ def refine_obstacles_ref_by_contact_new(
     delta_dis,  ##相对上一时刻的位移
     obstacles_ref,
     current_action,
+    last_action,
     contact_obj_line,
     contact_obs_line,
     target_contour_idx,
-    explored_contours,
 ):
     def edge_gap(edge_a, edge_b):
         edge_a = np.asarray(edge_a, dtype=float)
@@ -2163,7 +2163,9 @@ def refine_obstacles_ref_by_contact_new(
         np.array([1, 0]),
         np.array([-1, 0]),
     ]:
-        if np.array_equal(action, current_action):
+        if np.array_equal(action, current_action) or np.array_equal(
+            action, last_action
+        ):
             continue
         cand_axis = action_axis(action)
         _, _, cand_pairs = M_planning_ref.select_pairs(action, movable_objects)
@@ -2223,11 +2225,11 @@ if __name__ == "__main__":
         loaded = pickle.load(f)
     obstacles = loaded
     # obstacles_ref = transform_obstacles_with_bounded_perturbation(obstacles, translate_ratio=0.2)
-    pkl_path = f"./three pin test/ablation_control_19/socket_contours_2_ref.pkl"
+    pkl_path = f"./socket_contours_2_ref.pkl"
     with open(pkl_path, "rb") as f:
         loaded = pickle.load(f)
     obstacles_ref = loaded
-    folder = f"three pin test"
+    folder = f"three pin test_4"
     os.makedirs(folder, exist_ok=True)
     scene_plot_obstacles_compare(obstacles, obstacles_ref)
     # R = np.array([[0, -1], [1, 0]])  # 顺时针90°旋转矩阵
@@ -2299,14 +2301,20 @@ if __name__ == "__main__":
             [-61.15938269, 2.32864599],
             [-31.70536034, 11.12489254],
             [-54.376559, 26.27646956],
+            [-50.58163401, 9.90849218],
+            [-52.98765443, 8.05038909],
+            [-54.58163401, 9.90849218],
+            [-57.98765443, 8.05038909],
+            [-62.99462935, 10.15694907],
+            [-63.99462935, 9.15694907],
         ]
     )
 
     num = 0
     explored_contours = set()
-    for p in range(0, 10):
+    for p in range(0, len(ref_points)):
         # 每次迭代的新目录
-        folder = f"three pin test/ablation_control_{p}"  # 或用时间戳
+        folder = f"three pin test_4/ablation_control_{p}"  # 或用时间戳
         # folder = datetime.now().strftime("run_%Y%m%d_%H%M%S")
         os.makedirs(folder, exist_ok=True)
 
@@ -2679,6 +2687,7 @@ if __name__ == "__main__":
                     else:
                         # 以当前接触位置作为修边起点，优先沿当前接触方向继续推动，便于连续修正同一轮廓的相邻边
                         current_action = v_pred.copy()
+                        last_action = v_pred.copy()
                         action_list = [
                             current_action,
                             np.array([current_action[1], -current_action[0]]),
@@ -2715,6 +2724,45 @@ if __name__ == "__main__":
                                     print(
                                         f"接触到障碍物，ref_point={ref_point}, action={current_action}"
                                     )
+                                    # 模拟接触发生时，机械臂末端比物体会多移动一段距离
+                                    distance = 0.1
+                                    if current_action[0] == -1:
+                                        distance = (
+                                            1.5 + np.random.uniform(0.99, 0.11)
+                                            if abs(Pos_list[-1][0] - Pos_list[0][0])
+                                            > 1.5
+                                            else 0.1
+                                        )
+                                    elif current_action[0] == 1:
+                                        distance = (
+                                            0.26 + np.random.uniform(0.99, 0.11)
+                                            if abs(Pos_list[-1][0] - Pos_list[0][0])
+                                            > 0.26
+                                            else 0.1
+                                        )
+                                    elif current_action[1] == 1:
+                                        distance = (
+                                            np.random.uniform(0.99, 0.11)
+                                            if abs(Pos_list[-1][1] - Pos_list[0][1])
+                                            > 0.1
+                                            else 0.1
+                                        )
+                                    elif current_action[1] == -1:
+                                        distance = (
+                                            0.4 + np.random.uniform(0.99, 0.11)
+                                            if abs(Pos_list[-1][1] - Pos_list[0][1])
+                                            > 0.4
+                                            else 0.1
+                                        )
+                                    while distance > 0:
+                                        ref_point += (
+                                            current_action * M_planning.d
+                                        )  # 每步的步长为d
+                                        Pos_list = np.append(
+                                            Pos_list, ref_point
+                                        ).reshape(-1, 2)
+                                        distance -= M_planning.d
+
                                     contact_obj_line = obj_line
                                     contact_obs_line = obs_line
                                     delta_dis = Pos_list[-1] - Pos_list[0]
@@ -2730,6 +2778,7 @@ if __name__ == "__main__":
                                         delta_dis,
                                         obstacles_ref,
                                         current_action,
+                                        last_action,
                                         contact_obj_line,
                                         contact_obs_line,
                                         target_contour_idx=contact_contour_idx,
@@ -2752,6 +2801,7 @@ if __name__ == "__main__":
                                 )
                                 next_action = None
                             adjust_round += 1
+                            last_action = current_action.copy()
                             current_action = (
                                 next_action
                                 if next_action is not None
@@ -2796,6 +2846,7 @@ if __name__ == "__main__":
                             current_action = np.array(
                                 [0, np.sign(direction[1])], dtype=float
                             )
+                        last_action = current_action.copy()
 
                         action_list = [
                             current_action,
@@ -2833,6 +2884,45 @@ if __name__ == "__main__":
                                         f"接触到待探索轮廓 {nearest_contour_idx}, "
                                         f"ref_point={ref_point}, action={current_action}"
                                     )
+                                    # 模拟接触发生时，机械臂末端比物体会多移动一段距离
+                                    distance = 0.1
+                                    if current_action[0] == -1:
+                                        distance = (
+                                            1.5 + np.random.uniform(0.99, 0.11)
+                                            if abs(Pos_list[-1][0] - Pos_list[0][0])
+                                            > 1.5
+                                            else 0.1
+                                        )
+                                    elif current_action[0] == 1:
+                                        distance = (
+                                            0.26 + np.random.uniform(0.99, 0.11)
+                                            if abs(Pos_list[-1][0] - Pos_list[0][0])
+                                            > 0.26
+                                            else 0.1
+                                        )
+                                    elif current_action[1] == 1:
+                                        distance = (
+                                            np.random.uniform(0.99, 0.11)
+                                            if abs(Pos_list[-1][1] - Pos_list[0][1])
+                                            > 0.1
+                                            else 0.1
+                                        )
+                                    elif current_action[1] == -1:
+                                        distance = (
+                                            0.4 + np.random.uniform(0.99, 0.11)
+                                            if abs(Pos_list[-1][1] - Pos_list[0][1])
+                                            > 0.4
+                                            else 0.1
+                                        )
+                                    while distance > 0:
+                                        ref_point += (
+                                            current_action * M_planning.d
+                                        )  # 每步的步长为d
+                                        Pos_list = np.append(
+                                            Pos_list, ref_point
+                                        ).reshape(-1, 2)
+                                        distance -= M_planning.d
+
                                     contact_obj_line = obj_line
                                     contact_obs_line = obs_line
                                     delta_dis = Pos_list[-1] - Pos_list[0]
@@ -2848,6 +2938,7 @@ if __name__ == "__main__":
                                         delta_dis,
                                         obstacles_ref,
                                         current_action,
+                                        last_action,
                                         contact_obj_line,
                                         contact_obs_line,
                                         target_contour_idx=contact_contour_idx,
@@ -2871,6 +2962,7 @@ if __name__ == "__main__":
                                 next_action = None
 
                             adjust_round += 1
+                            last_action = current_action.copy()
                             current_action = (
                                 next_action
                                 if next_action is not None
@@ -2884,6 +2976,7 @@ if __name__ == "__main__":
                     Movable_objects, ref_point
                 )
                 current_action = np.array([0, 1])
+                last_action = current_action.copy()
                 action_list = [
                     np.array([0, 1]),
                     np.array([1, 0]),
@@ -2914,6 +3007,39 @@ if __name__ == "__main__":
                             print(
                                 f"接触到障碍物，ref_point={ref_point}, action={current_action}"
                             )
+                            # 模拟接触发生时，机械臂末端比物体会多移动一段距离
+                            distance = 0.1
+                            if current_action[0] == -1:
+                                distance = (
+                                    1.5 + np.random.uniform(0.99, 0.11)
+                                    if abs(Pos_list[-1][0] - Pos_list[0][0]) > 1.5
+                                    else 0.1
+                                )
+                            elif current_action[0] == 1:
+                                distance = (
+                                    0.26 + np.random.uniform(0.99, 0.11)
+                                    if abs(Pos_list[-1][0] - Pos_list[0][0]) > 0.26
+                                    else 0.1
+                                )
+                            elif current_action[1] == 1:
+                                distance = (
+                                    np.random.uniform(0.99, 0.11)
+                                    if abs(Pos_list[-1][1] - Pos_list[0][1]) > 0.1
+                                    else 0.1
+                                )
+                            elif current_action[1] == -1:
+                                distance = (
+                                    0.4 + np.random.uniform(0.99, 0.11)
+                                    if abs(Pos_list[-1][1] - Pos_list[0][1]) > 0.4
+                                    else 0.1
+                                )
+                            while distance > 0:
+                                ref_point += (
+                                    current_action * M_planning.d
+                                )  # 每步的步长为d
+                                Pos_list = np.append(Pos_list, ref_point).reshape(-1, 2)
+                                distance -= M_planning.d
+
                             contact_obj_line = obj_line
                             contact_obs_line = obs_line
                             delta_dis = Pos_list[-1] - Pos_list[0]
@@ -2929,6 +3055,7 @@ if __name__ == "__main__":
                                 delta_dis,
                                 obstacles_ref,
                                 current_action,
+                                last_action,
                                 contact_obj_line,
                                 contact_obs_line,
                                 target_contour_idx=hole_contour_idx,
@@ -2950,6 +3077,7 @@ if __name__ == "__main__":
                         next_action = None
 
                     adjust_round += 1
+                    last_action = current_action.copy()
                     current_action = (
                         next_action
                         if next_action is not None
@@ -2977,6 +3105,6 @@ if __name__ == "__main__":
         )
         ## 保存obstacles_ref到新的pkl文件
         with open(
-            f"three pin test/ablation_control_{p}/socket_contours_2_ref.pkl", "wb"
+            f"three pin test_4/ablation_control_{p}/socket_contours_2_ref.pkl", "wb"
         ) as f:
             pickle.dump(obstacles_ref, f)
