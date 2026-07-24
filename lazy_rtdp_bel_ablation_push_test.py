@@ -14,7 +14,7 @@ from scipy.spatial.transform import Rotation as R, Slerp
 from scipy.spatial import KDTree
 
 """
-使用 Lazy RTDP-Bel 惰性动作评估的 blind push block 消融实验
+使用 Lazy RTDP-Bel 惰性动作评估的 blind push block 消融实验 
 """
 
 
