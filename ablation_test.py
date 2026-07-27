@@ -1,3 +1,6 @@
+import os
+from datetime import datetime
+
 import math
 from collections import Counter
 import numpy as np
@@ -14,8 +17,184 @@ from scipy.spatial.transform import Rotation as R, Slerp
 from scipy.spatial import KDTree
 
 """
-完善主动跳岛探索后的代码
+完善主动跳岛探索后的代码，可以实现插孔的消融实验
 """
+
+
+def transform_obstacles_with_bounded_perturbation(
+    obstacles,
+    translate_ratio=0.1,
+    edge_ratio=0.1,
+    max_scale_attempts=300,
+    max_translate_attempts=400,
+    rng=None,
+):
+    """对障碍物多边形做受限平移、受限边伸缩，并尽量消除多边形间相交。"""
+    rng = np.random.default_rng() if rng is None else rng
+
+    def _normalize_vertices(vertices):
+        vertices = np.asarray(vertices, dtype=float)
+        if len(vertices) >= 2 and np.allclose(vertices[0], vertices[-1]):
+            vertices = vertices[:-1]
+        return vertices
+
+    def _sample_edge_scales(edges):
+        edge_count = len(edges)
+        if edge_count < 3:
+            return np.ones(edge_count, dtype=float)
+
+        lower = 1.0 - edge_ratio
+        upper = 1.0 + edge_ratio
+
+        best_pair = None
+        best_det = 0.0
+        for i in range(edge_count):
+            for j in range(i + 1, edge_count):
+                det = abs(edges[i][0] * edges[j][1] - edges[i][1] * edges[j][0])
+                if det > best_det:
+                    best_det = det
+                    best_pair = (i, j)
+
+        if best_pair is None or best_det < 1e-12:
+            return None
+
+        idx_a, idx_b = best_pair
+        mat = np.column_stack((edges[idx_a], edges[idx_b]))
+        other_indices = [idx for idx in range(edge_count) if idx not in best_pair]
+
+        for _ in range(max_scale_attempts):
+            scales = np.ones(edge_count, dtype=float)
+            if other_indices:
+                scales[other_indices] = rng.uniform(
+                    lower, upper, size=len(other_indices)
+                )
+                residual = -np.sum(
+                    edges[other_indices] * scales[other_indices][:, None], axis=0
+                )
+            else:
+                residual = np.zeros(2, dtype=float)
+
+            try:
+                sol = np.linalg.solve(mat, residual)
+            except np.linalg.LinAlgError:
+                return None
+
+            if np.all(sol >= lower) and np.all(sol <= upper):
+                scales[idx_a] = sol[0]
+                scales[idx_b] = sol[1]
+                return scales
+
+        return None
+
+    def _rebuild_polygon(vertices, edges, scales):
+        rebuilt = np.empty_like(vertices)
+        rebuilt[0] = vertices[0]
+        for idx in range(1, len(vertices)):
+            rebuilt[idx] = rebuilt[idx - 1] + scales[idx - 1] * edges[idx - 1]
+        return rebuilt
+
+    def _is_valid_polygon(vertices):
+        poly = Polygon(vertices)
+        return poly.is_valid and poly.area > 1e-9
+
+    transformed = []
+    accepted_polygons = []
+
+    for obstacle in obstacles:
+        vertices = _normalize_vertices(obstacle)
+        if len(vertices) < 3:
+            transformed.append(vertices.copy())
+            accepted_polygons.append(Polygon(vertices))
+            continue
+
+        edges = np.roll(vertices, -1, axis=0) - vertices
+        max_size = max(np.ptp(vertices[:, 0]), np.ptp(vertices[:, 1]))
+        translate_limit = translate_ratio * max_size
+
+        scaled_vertices = None
+        for _ in range(max_scale_attempts):
+            scales = _sample_edge_scales(edges)
+            if scales is None:
+                break
+            candidate_vertices = _rebuild_polygon(vertices, edges, scales)
+            if _is_valid_polygon(candidate_vertices):
+                scaled_vertices = candidate_vertices
+                break
+
+        if scaled_vertices is None:
+            scaled_vertices = vertices.copy()
+
+        base_polygon = Polygon(scaled_vertices)
+        if not base_polygon.is_valid or base_polygon.area <= 0:
+            scaled_vertices = vertices.copy()
+            base_polygon = Polygon(scaled_vertices)
+
+        best_vertices = scaled_vertices.copy()
+        best_polygon = base_polygon
+
+        if translate_limit <= 0:
+            accepted_polygons.append(best_polygon)
+            transformed.append(best_vertices)
+            continue
+
+        collision_polygons = accepted_polygons.copy()
+        for _ in range(max_translate_attempts):
+            angle = rng.uniform(0.0, 2.0 * np.pi)
+            radius = translate_limit * np.sqrt(rng.uniform(0.0, 1.0))
+            shift = np.array(
+                [radius * np.cos(angle), radius * np.sin(angle)], dtype=float
+            )
+            candidate_vertices = scaled_vertices + shift
+            candidate_polygon = Polygon(candidate_vertices)
+            if not candidate_polygon.is_valid or candidate_polygon.area <= 0:
+                continue
+            if any(candidate_polygon.intersects(other) for other in collision_polygons):
+                continue
+            best_vertices = candidate_vertices
+            best_polygon = candidate_polygon
+            break
+        else:
+            centroid = np.array(base_polygon.centroid.coords[0], dtype=float)
+            directions = []
+            for other in collision_polygons:
+                other_centroid = np.array(other.centroid.coords[0], dtype=float)
+                direction = centroid - other_centroid
+                norm = np.linalg.norm(direction)
+                if norm > 1e-9:
+                    directions.append(direction / norm)
+            directions.extend(
+                [
+                    np.array([1.0, 0.0]),
+                    np.array([-1.0, 0.0]),
+                    np.array([0.0, 1.0]),
+                    np.array([0.0, -1.0]),
+                ]
+            )
+
+            for direction in directions:
+                for radius in np.linspace(0.0, translate_limit, 40):
+                    shift = direction * radius
+                    candidate_vertices = scaled_vertices + shift
+                    candidate_polygon = Polygon(candidate_vertices)
+                    if not candidate_polygon.is_valid or candidate_polygon.area <= 0:
+                        continue
+                    if any(
+                        candidate_polygon.intersects(other)
+                        for other in collision_polygons
+                    ):
+                        continue
+                    best_vertices = candidate_vertices
+                    best_polygon = candidate_polygon
+                    break
+                if not any(
+                    best_polygon.intersects(other) for other in collision_polygons
+                ):
+                    break
+
+        accepted_polygons.append(best_polygon)
+        transformed.append(best_vertices)
+
+    return transformed
 
 
 class Motion_planning:
@@ -52,6 +231,10 @@ class Motion_planning:
             np.array([0, -1]),
         ]
         self.r = 1.5  ##重采样半径范围
+
+        self.obj_ref_range = (
+            []
+        )  ##存储每个接触对对应的参考点的运动范围 [xmin,xmax,ymin,ymax]
 
     ## 原类中一些函数要继承
     def path_smoothing(self, Path_points, q0, qf, t_final, freq):
@@ -510,7 +693,7 @@ class Motion_planning:
                             point_to_segment_distance(p4, p1, p2),
                         ]
                     )
-                    if dists < 0.5:
+                    if dists < 0.1:
                         z_pred = 1
                         # break
 
@@ -610,7 +793,7 @@ class Motion_planning:
                             point_to_segment_distance(p4, p1, p2),
                         ]
                     )
-                    if dists < 0.5:
+                    if dists < 0.1:
                         z_pred = 1
                         # break
 
@@ -686,100 +869,147 @@ class Motion_planning:
                 return True, 0.0
 
         if len(modes) == 2000:  ##无峰值，随机选择运动方向(251205实验)
-            v_pred_2 = self.actions[np.random.randint(len(self.actions))]
-            print(f"v_pred={v_pred_2}")
-            print(
-                "Is the selected velocity suitable? Press 'q' and Enter to continue..."
-            )
-            while True:
-                user_in = input()
-                if user_in == "q":
-                    break
-                elif user_in == "w":
-                    try:
-                        new_val_0 = float(input("请输入新的 v_pred[0] 值: "))
-                        new_val_1 = float(input("请输入新的 v_pred[1] 值: "))
-                        v_pred_2 = np.array([new_val_0, new_val_1])
-                        print(f"self.v_pred 已更新为 {v_pred_2}")
-                    except ValueError:
-                        print("输入无效，请输入数值。")
-                else:
-                    print("无效输入，请输入 'q' 或 'w'")
-
             self.Gain_information = []
             self.Pos_free = []
-            object = Object
-            Z_pred_all = []
-            Weight_all = []
-            Distance_all = []
-            Pos = []
-            for c in modes:
-                pos = c[0]  ##峰值的位置，估计当参考点在此处时机器人如何运动
-                weight = c[1]
-                Weight_all.append(weight)
-                Pos.append(pos)
-                _, _, poten_con_pairs_4 = self.select_pairs(v_pred_2, object)
-                Dis = []  ##可能遇到的接触对应的ref_point运动范围
-                for pair in poten_con_pairs_4:
-                    xmin, ymin = pair[2][0]
-                    xmax, ymax = pair[2][1]
-                    if abs(xmin - xmax) < 0.5:
-                        xmin -= 2.0
-                        xmax += 2.0
-                    if abs(ymin - ymax) < 0.5:
-                        ymin -= 2.0
-                        ymax += 2.0  # 防止轮廓退化成一条直线
-                    contact_range = np.array([[xmin, ymin], [xmax, ymax]])
-                    IF_cutin, dis = ray_rectangle_intersection(
-                        pos, v_pred_2, contact_range
-                    )
-                    if IF_cutin == True:  ##说明一定会遇到接触事件
-                        Dis.append(dis)
-                if len(Dis) > 0:
-                    Z_pred_all.append(
-                        1
-                    )  ##此峰值位置和此运动方向下，会遇到障碍使传感器信号改变
-                    Distance_all.append(min(Dis))
-                else:
-                    Z_pred_all.append(
-                        -1
-                    )  ##此峰值位置和此运动方向下，不会遇到障碍，而会超出轮廓范围
-                    if np.max(v_pred_2) == 1.0:
-                        contact_range = np.array([[self.x_max, 0.0], [0.0, self.y_max]])
-                        a1 = v_pred_2.reshape(1, 2)
-                        contour = np.dot(a1, contact_range)
+            self.Dis_var = []
+            for a in self.actions:
+                object = Object
+                Z_pred_all = []
+                Weight_all = []
+                Distance_all = []
+                Pos = []
+                _, _, poten_con_pairs_4 = self.select_pairs(a, object)
+                for c in modes:
+                    pos = c[0]  ##峰值的位置，估计当参考点在此处时机器人如何运动
+                    weight = c[1]
+                    Weight_all.append(weight)
+                    Pos.append(pos)
+                    Dis = []  ##可能遇到的接触对应的ref_point运动距离
+                    for pair in poten_con_pairs_4:
+                        xmin, ymin = pair[2][0]
+                        xmax, ymax = pair[2][1]
+                        if abs(xmin - xmax) < 0.5:
+                            xmin -= 2.0
+                            xmax += 2.0
+                        if abs(ymin - ymax) < 0.5:
+                            ymin -= 2.0
+                            ymax += 2.0  # 防止轮廓退化成一条直线
+                        contact_range = np.array([[xmin, ymin], [xmax, ymax]])
+                        IF_cutin, dis = ray_rectangle_intersection(
+                            pos, a, contact_range
+                        )
+                        if IF_cutin == True:  ##说明一定会遇到接触事件
+                            Dis.append(dis)
+                    if len(Dis) > 0:
+                        Z_pred_all.append(
+                            1
+                        )  ##此峰值位置和此运动方向下，会遇到障碍使传感器信号改变
+                        Distance_all.append(min(Dis))
                     else:
-                        contact_range = np.array([[self.x_min, 0.0], [0.0, self.y_min]])
-                        a1 = -v_pred_2.reshape(1, 2)
-                        contour = np.dot(a1, contact_range.T)
-                    ## 此时对于距离的计算是到轮廓边缘的距离
-                    d = float(np.dot(a1, (contour - pos.reshape(1, 2)).T))
-                    Distance_all.append(d)
-            ## 计算粒子的加权数目
-            N_particles_all = np.ones(2000)
-            ##在运动方向a下，所有模式c的无障碍运动距离和障碍类型都已确定，计算此运动方向的信息增益
-            # 遇到不同的障碍类型的熵
-            Z_pred_all = np.array(Z_pred_all)
-            counts = [
-                np.sum(N_particles_all[Z_pred_all == 1]) + 1e-10,
-                np.sum(N_particles_all[Z_pred_all == -1]) + 1e-10,
-            ]
-            total = np.sum(N_particles_all)  # 总数
-            probs = np.array([count / total for count in counts])  # 概率分布
-            entropy = -np.sum(probs * np.log2(probs))  # 熵公式
+                        Z_pred_all.append(
+                            -1
+                        )  ##此峰值位置和此运动方向下，不会遇到障碍，而会超出轮廓范围
+                        if np.max(a) == 1.0:
+                            contact_range = np.array(
+                                [[self.x_max + 1e-10, 0.0], [0.0, self.y_max + 1e-10]]
+                            )
+                            a1 = a.reshape(1, 2)
+                            contour = np.dot(a1, contact_range)
+                        else:
+                            contact_range = np.array(
+                                [[self.x_min + 1e-10, 0.0], [0.0, self.y_min + 1e-10]]
+                            )
+                            a1 = -a.reshape(1, 2)
+                            contour = np.dot(a1, contact_range)
+                        ## 此时对于距离的计算是到轮廓边缘的距离
+                        d = float(
+                            np.dot(a.reshape(1, 2), (contour - pos.reshape(1, 2)).T)
+                        )
+                        Distance_all.append(d)
+                ## 计算粒子的加权数目
+                if max(Weight_all) - min(Weight_all) < 1e-10:
+                    N_particles_all = np.ones(len(modes))
+                else:
+                    N_particles_all = (Weight_all - min(Weight_all)) / (
+                        max(Weight_all) - min(Weight_all)
+                    ) + 1
+                    N_particles_all = np.array(N_particles_all)
+                ##在运动方向a下，所有模式c的无障碍运动距离和障碍类型都已确定，计算此运动方向的信息增益
+                # 遇到不同的障碍类型的熵
+                Z_pred_all = np.array(Z_pred_all)
+                Distance_all = np.array(Distance_all)
+                counts = [
+                    np.sum(N_particles_all[Z_pred_all == 1]) + 1e-10,
+                    np.sum(N_particles_all[Z_pred_all == -1]) + 1e-10,
+                ]
+                total = np.sum(N_particles_all)  # 总数
+                probs = np.array([count / total for count in counts])  # 概率分布
+                entropy = -np.sum(probs * np.log2(probs))  # 熵公式
+                ##计算运动距离的香农熵
+                variance = np.std(Distance_all)  # 距离的变化范围
+                # 1. 计算加权直方图
+                bins = max(
+                    1, int((np.max(Distance_all) - np.min(Distance_all)) / delta)
+                )  ##等间距划分类别
+                hist, bin_edges = np.histogram(
+                    Distance_all, bins=bins, weights=np.array(Weight_all)
+                )
+                # 2. 过滤掉权重为 0 的 bin，避免 log(0) 报错
+                p = hist[hist > 0]
+                # 3. 计算香农熵 (单位通常为 Nat，若用 np.log2 则单位为 Bit)
+                if len(p) == 1:
+                    entropy_dis = 0.0
+                else:
+                    entropy_dis = -np.sum(p * np.log2(p))
+                    entropy_dis = entropy_dis / (np.log2(len(hist)) + 1e-10)
 
-            Pos = np.array(Pos).reshape(-1, 2)
-            self.Pos_free = [
-                Pos[Z_pred_all == 1],
-                Pos[Z_pred_all == -1],
-            ]  # 对于在此运动方向下不同接触事件对应的粒子位置的集合
-            self.Gain_information.append(
-                entropy
-            )  ##信息增益的衡量，一个是熵，还有一个与距离有关（未定）
+                Pos = np.array(Pos).reshape(-1, 2)
+                pos_free = [
+                    Pos[Z_pred_all == 1],
+                    Pos[Z_pred_all == -1],
+                ]  # 对于在此运动方向下不同接触事件对应的粒子位置的集合
 
-        elif len(modes) == 1:  ##峰值数量不多时，判断粒子的分布是否集中在有限数量内
-            v_pred_2 = np.array([0, 0])
-            print(f"Find the uni-model and optimal trajectory!")
+                self.Gain_information.append(
+                    entropy
+                )  ##信息增益的衡量，一个是熵，还有一个与距离有关（未定）
+                self.Pos_free.append(pos_free)
+                self.Dis_var.append(entropy_dis)
+
+            self.Gain_information = np.array(self.Gain_information).reshape(4, -1)
+            self.Dis_var = np.array(self.Dis_var).reshape(4, -1)
+            # v_pred_2 = self.actions[
+            #     np.argmax(self.Gain_information)
+            # ]  # 找到 a 中最大值的索引
+            # ## 打印熵的情况，判断动作方向的选择是否合理
+            # print(
+            #     f"The Gain_information is: {self.Gain_information}, The current velocity is: {v_pred_2}"
+            # )
+            if np.max(self.Gain_information) < np.max(self.Dis_var):
+                print(
+                    f"The Gain_information is: {self.Gain_information},The all entropy are low and we choose the distance flag."
+                )
+                v_pred_2 = self.actions[
+                    np.argmax(self.Dis_var)
+                ]  # 找到 a 中最大值的索引
+                print(
+                    f"The DIs_entropy is: {self.Dis_var}, The current velocity is: {v_pred_2}"
+                )
+                self.Pos_free = self.Pos_free[
+                    np.flatnonzero((self.actions == v_pred_2).all(axis=1))[0]
+                ]  # 找到a对应的粒子集合
+                return np.max(self.Dis_var), v_pred_2
+            else:
+                v_pred_2 = self.actions[
+                    np.argmax(self.Gain_information)
+                ]  # 找到 a 中最大值的索引
+                print(
+                    f"The Gain_information is: {self.Gain_information}, The current velocity is: {v_pred_2}"
+                )
+                print(f"The DIs_entropy is: {self.Dis_var}")
+                self.Pos_free = self.Pos_free[
+                    np.flatnonzero((self.actions == v_pred_2).all(axis=1))[0]
+                ]  # 找到a对应的粒子集合
+                return np.max(self.Gain_information), v_pred_2
         else:
             self.Gain_information = []
             self.Pos_free = []
@@ -889,26 +1119,39 @@ class Motion_planning:
 
             self.Gain_information = np.array(self.Gain_information).reshape(4, -1)
             self.Dis_var = np.array(self.Dis_var).reshape(4, -1)
-            v_pred_2 = self.actions[
-                np.argmax(self.Gain_information)
-            ]  # 找到 a 中最大值的索引
-            ## 打印熵的情况，判断动作方向的选择是否合理
-            print(
-                f"The Gain_information is: {self.Gain_information}, The current velocity is: {v_pred_2}"
-            )
-            # if np.max(self.Gain_information) < 0.7:
-            #     if np.max(self.Gain_information) < np.max(self.Dis_var):
-            #         print(f"The Gain_information is: {self.Gain_information},The all entropy are low and we choose the distance flag.")
-            #         v_pred_2 = self.actions[np.argmax(self.Dis_var)]  # 找到 a 中最大值的索引
-            #         print(f'The DIs_entropy is: {self.Dis_var}, The current velocity is: {v_pred_2}')
-            #     else:
-            #         v_pred_2 = self.actions[np.argmax(self.Gain_information)]   # 找到 a 中最大值的索引
-            #         print(f'The Gain_information is: {self.Gain_information}, The current velocity is: {v_pred_2}')
-            #         print(f'The DIs_entropy is: {self.Dis_var}')
-            # else:
-            #     v_pred_2 = self.actions[np.argmax(self.Gain_information)]   # 找到 a 中最大值的索引
-            #     ## 打印熵的情况，判断动作方向的选择是否合理
-            #     print(f'The Gain_information is: {self.Gain_information}, The current velocity is: {v_pred_2}')
+            # v_pred_2 = self.actions[
+            #     np.argmax(self.Gain_information)
+            # ]  # 找到 a 中最大值的索引
+            # ## 打印熵的情况，判断动作方向的选择是否合理
+            # print(
+            #     f"The Gain_information is: {self.Gain_information}, The current velocity is: {v_pred_2}"
+            # )
+            if np.max(self.Gain_information) < np.max(self.Dis_var):
+                print(
+                    f"The Gain_information is: {self.Gain_information},The all entropy are low and we choose the distance flag."
+                )
+                v_pred_2 = self.actions[
+                    np.argmax(self.Dis_var)
+                ]  # 找到 a 中最大值的索引
+                print(
+                    f"The DIs_entropy is: {self.Dis_var}, The current velocity is: {v_pred_2}"
+                )
+                self.Pos_free = self.Pos_free[
+                    np.flatnonzero((self.actions == v_pred_2).all(axis=1))[0]
+                ]  # 找到a对应的粒子集合
+                return np.max(self.Dis_var), v_pred_2
+            else:
+                v_pred_2 = self.actions[
+                    np.argmax(self.Gain_information)
+                ]  # 找到 a 中最大值的索引
+                print(
+                    f"The Gain_information is: {self.Gain_information}, The current velocity is: {v_pred_2}"
+                )
+                print(f"The DIs_entropy is: {self.Dis_var}")
+                self.Pos_free = self.Pos_free[
+                    np.flatnonzero((self.actions == v_pred_2).all(axis=1))[0]
+                ]  # 找到a对应的粒子集合
+                return np.max(self.Gain_information), v_pred_2
 
             # print("Is the selected velocity suitable? Press 'q' and Enter to continue...")
             # while True:
@@ -925,11 +1168,6 @@ class Motion_planning:
             #             print("输入无效，请输入数值。")
             #     else:
             #         print("无效输入，请输入 'q' 或 'w'")
-            self.Pos_free = self.Pos_free[
-                np.flatnonzero((self.actions == v_pred_2).all(axis=1))[0]
-            ]  # 找到a对应的粒子集合
-
-        return v_pred_2
 
     def extract_circle_clusters(self, particles_5, radius=1.0):
         """
@@ -1128,7 +1366,7 @@ class Motion_planning:
             ]  # 找到 a 中最大值的索引
             ## 打印熵的情况，判断动作方向的选择是否合理
             print(
-                f"The Gain_information is: {self.Gain_information_optimize}, The chosen cluster is: {cluster_chosen}"
+                f"The optimization_entropy is: {self.Gain_information_optimize}, The chosen cluster is: {cluster_chosen}"
             )
             Particle_left = Particle_left[
                 np.flatnonzero((clusters_array == cluster_chosen).all(axis=1))[0]
@@ -1326,7 +1564,16 @@ def scene_plot(scene, xs, ys, object_mask, obstacles, object_pos, ref_point, par
 
 
 def scene_plot_with_image(
-    img_path, scene, object_mask, xs, ys, obstacles, particles, weights
+    img_path,
+    scene,
+    object_mask,
+    xs,
+    ys,
+    obstacles,
+    obstacles_ref,
+    particles,
+    weights,
+    names,
 ):
     # 读取图片
     img = mpimg.imread(img_path)
@@ -1361,7 +1608,7 @@ def scene_plot_with_image(
         interpolation="nearest",
     )
     # 遍历每个轮廓，绘制填充多边形
-    for contour in obstacles:
+    for contour in obstacles_ref:
         polygon = patches.Polygon(
             contour,
             closed=True,
@@ -1404,7 +1651,7 @@ def scene_plot_with_image(
     ax.legend(loc="upper right")
     # 添加这一行保存图片
     plt.savefig(
-        os.path.join(folder, f"contact_slam_data_2511101625_{str(num)}.png"),
+        os.path.join(folder, names),
         dpi=300,
         bbox_inches="tight",
     )
@@ -1498,19 +1745,74 @@ def scene_plot_with_image_circle(
     plt.show()
 
 
+def scene_plot_obstacles_compare(obstacles, obstacles_new):
+    """在同一张图中对比绘制原始障碍物和变换后的障碍物。"""
+    fig, ax = plt.subplots(figsize=(8, 6))
+
+    for idx, contour in enumerate(obstacles):
+        polygon = patches.Polygon(
+            contour,
+            closed=True,
+            facecolor=(1, 0, 0, 0.12),
+            edgecolor="red",
+            linewidth=1.2,
+            linestyle="--",
+            label="obstacles" if idx == 0 else "_nolegend_",
+        )
+        ax.add_patch(polygon)
+
+    for idx, contour in enumerate(obstacles_new):
+        polygon = patches.Polygon(
+            contour,
+            closed=True,
+            facecolor=(0, 0.6, 1, 0.18),
+            edgecolor="blue",
+            linewidth=1.5,
+            label="obstacles_new" if idx == 0 else "_nolegend_",
+        )
+        ax.add_patch(polygon)
+
+    if len(obstacles) > 0 or len(obstacles_new) > 0:
+        all_points = []
+        if len(obstacles) > 0:
+            all_points.append(np.vstack(obstacles))
+        if len(obstacles_new) > 0:
+            all_points.append(np.vstack(obstacles_new))
+        all_points = np.vstack(all_points)
+        margin = max(
+            1.0, 0.05 * max(np.ptp(all_points[:, 0]), np.ptp(all_points[:, 1]))
+        )
+        ax.set_xlim(
+            np.min(all_points[:, 0]) - margin, np.max(all_points[:, 0]) + margin
+        )
+        ax.set_ylim(
+            np.min(all_points[:, 1]) - margin, np.max(all_points[:, 1]) + margin
+        )
+
+    ax.set_aspect("equal")
+    ax.set_xlabel("X (mm)")
+    ax.set_ylabel("Y (mm)")
+    ax.legend(loc="best")
+    plt.tight_layout()
+    # 添加这一行保存图片
+    plt.savefig(
+        os.path.join(folder, f"socket_contours_ref vs socket_contour_true.png"),
+        dpi=300,
+        bbox_inches="tight",
+    )
+    plt.show()
+
+
 # ===== 示例 =====
 if __name__ == "__main__":
-    # # 障碍物1：矩形
-    # rect = np.array([[20, 20], [60, 20], [60, 60], [20, 60]])
-    # # 障碍物2：三角形
-    # tri = np.array([[80, 30], [120, 50], [100, 90]])
-    # obstacles = [rect, tri]
     import pickle
 
     pkl_path = f"./socket_contours_2.pkl"
     with open(pkl_path, "rb") as f:
         loaded = pickle.load(f)
     obstacles = loaded
+    folder = f"two-pin-circle test_exp"
+    os.makedirs(folder, exist_ok=True)
     # R = np.array([[0, -1], [1, 0]])  # 顺时针90°旋转矩阵
     # rotated = []
     # for c in obstacles:
@@ -1518,11 +1820,18 @@ if __name__ == "__main__":
     # obstacles = rotated
     # 可移动物体由多个封闭轮廓组成（相对参考点坐标）
     # Movable_objects = [
-    #     np.array([[-7, -3.2], [-5.5, -3.2], [-5.5, 3.2], [-7, 3.2]], dtype=float),  # 小矩形1
-    #     np.array([[5.5, -3.2], [7, -3.2], [7, 3.2], [5.5, 3.2]], dtype=float)  # 小矩形2（与1相对位置固定）
+    #     np.array(
+    #         [[-7, -3.2], [-5.5, -3.2], [-5.5, 3.2], [-7, 3.2]], dtype=float
+    #     ),  # 小矩形1
+    #     np.array(
+    #         [[5.5, -3.2], [7, -3.2], [7, 3.2], [5.5, 3.2]], dtype=float
+    #     ),  # 小矩形2（与1相对位置固定）
     # ]
-    # Movable_objects = [np.array([[-0.75, 5.98-11.38], [0.75, 5.98-11.38], [0.75, 0.0], [-0.75, 0.0]])]
-    ## 二指圆孔插销
+    # Movable_objects = [
+    #     np.array(
+    #         [[-0.75, 5.98 - 11.38], [0.75, 5.98 - 11.38], [0.75, 0.0], [-0.75, 0.0]]
+    #     )
+    # ] ##三脚插销
     Movable_objects = [
         np.array(
             [
@@ -1557,10 +1866,14 @@ if __name__ == "__main__":
         rotated.append(c @ R.T)  # 矩阵乘法
     Movable_objects = rotated
     movable_objects = Movable_objects
-    # # 构建仿真场景
-    # curve_dis = np.array([25.35, 31.11, 16.5, 16.5]) ##[delta_x_min,delta_x_max, delta_y_min, delta_y_max]
+    # 构建仿真场景
+    # curve_dis = np.array(
+    #     [25.35, 31.11, 16.5, 16.5]
+    # )  ##[delta_x_min,delta_x_max, delta_y_min, delta_y_max]
     # # 二指插座的间距设置
-    # curve_dis = np.array([9.4, 34.3, 14.75, 14.75])  ##[delta_x_min,delta_x_max, delta_y_min, delta_y_max]
+    # curve_dis = np.array(
+    #     [9.4, 34.3, 14.75, 14.75]
+    # )  ##[delta_x_min,delta_x_max, delta_y_min, delta_y_max]
     ## 二指圆孔插座间距设置
     curve_dis = np.array(
         [8.6, 33.5, 19.55, 19.55]
@@ -1601,16 +1914,20 @@ if __name__ == "__main__":
             [-61.15938269, 2.32864599],
             [-31.70536034, 11.12489254],
             [-54.376559, 26.27646956],
+            [-50.58163401, 9.90849218],
+            [-52.98765443, 8.05038909],
+            [-54.58163401, 9.90849218],
+            [-57.98765443, 8.05038909],
+            [-62.99462935, 10.15694907],
+            [-63.99462935, 9.15694907],
         ]
     )
 
-    import os
-    from datetime import datetime
-
     num = 0
-    for p in range(16, 25):
+    explored_contours = set()
+    for p in range(0, len(ref_points)):
         # 每次迭代的新目录
-        folder = f"ablation_control_{p}"  # 或用时间戳
+        folder = f"two-pin-circle test_exp/ablation_control_{p}"  # 或用时间戳
         # folder = datetime.now().strftime("run_%Y%m%d_%H%M%S")
         os.makedirs(folder, exist_ok=True)
 
@@ -1619,9 +1936,15 @@ if __name__ == "__main__":
         object_mask, object_pos = M_planning.add_movable_objects(
             movable_objects, ref_point
         )
+
         # 初始化粒子分布
         particle_range = np.array(
-            [[xs[0], ys[0]], [xs[-1], ys[0]], [xs[-1], ys[-1]], [xs[0], ys[-1]]]
+            [
+                [xs[0], ys[0]],
+                [xs[-1], ys[0]],
+                [xs[-1], ys[-1]],
+                [xs[0], ys[-1]],
+            ]
         )
         particles, weights = M_planning.generate_particles_in_polygon(
             [particle_range], N=2000
@@ -1632,15 +1955,78 @@ if __name__ == "__main__":
         terminate_flag = 0
 
         # v_pred = M_planning.gain_information(peaks, Movable_objects) ## 初次选择运动方向
-        v_pred = np.array([0, 1])  ##先固定向上运动，看看效果
+        Z_obs = None
         while (
             terminate_flag == 0 and num < 20
         ):  ##如果峰值数量不是1,那么进入主动探索阶段
             ##绘图
             img_path = f"socket_cropped.jpg"
             scene_plot_with_image(
-                img_path, scene, object_mask, xs, ys, obstacles, particles, weights
+                img_path,
+                scene,
+                object_mask,
+                xs,
+                ys,
+                obstacles,
+                obstacles,
+                particles,
+                weights,
+                names=f"contact_slam_N{Z_obs[-1]if Z_obs is not None else 0}_2511101625_{str(num)}.png",
             )
+            ##选择运动方向
+            ## 第一实验组（action+distance熵）,直接选择v_pred
+
+            ## 第二实验组（三种熵进行比较）
+            if num != 0:
+                if np.max(M_planning.Gain_information_optimize) >= gain:
+                    print(
+                        f"The max entropy is {np.max(M_planning.Gain_information_optimize)}, the chosen cluster is {pose_ref}"
+                    )
+                    v_pred = np.array([0, 1])
+                    particles = particle_left
+                    weights = weight_left
+                    # 更新一下物体的位置
+                    if Z_obs[-1] == -1:
+                        ref_point -= shift
+                    ref_point += hole_pose + np.array([0.0, -3.0]) - pose_ref
+                    object_mask, object_pos = M_planning.add_movable_objects(
+                        Movable_objects, ref_point
+                    )
+                    ##绘图
+                    img_path = f"socket_cropped.jpg"
+                    scene_plot_with_image(
+                        img_path,
+                        scene,
+                        object_mask,
+                        xs,
+                        ys,
+                        obstacles,
+                        obstacles,
+                        particles,
+                        weights,
+                        names=f"contact_slam_optimize_2511101625_{str(num)}.png",
+                    )
+                    ##保存相关数据进行分析
+                    np.savez(
+                        os.path.join(
+                            folder,
+                            f"contact_slam_optimize_data_2511101625_{str(num)}.npz",
+                        ),
+                        particles=particles_now,
+                        weights=weights,
+                        Pose_list=Pos_list,
+                        particles_filter=particles_filter,
+                        Z_list=Z_obs,
+                        v_pred=v_pred,
+                        scene=scene,
+                        object_mask=object_mask,
+                        xs=xs,
+                        ys=ys,
+                    )
+                else:
+                    print(f"The max entropy is {gain}, the chosen velocity is {v_pred}")
+            else:
+                v_pred = np.array([0, 1])  ##先固定向上运动，看看效果
 
             # ##根据v_pred的方向，对应不同的movable_objects的范围
             # if v_pred[1] == 1:
@@ -1672,34 +2058,6 @@ if __name__ == "__main__":
                     object_mask, object_pos = M_planning.add_movable_objects(
                         Movable_objects, ref_point
                     )
-                    # particle_range = []
-                    # xmin, xmax, ymin, ymax = 0,0,0,0
-                    # if abs(v_pred[1]) == 1:
-                    #     delta_x = 0.0
-                    #     delta_y = 5.0
-                    #     xmin = M_planning.x_min
-                    #     xmax = M_planning.x_max
-                    #     if v_pred[1] == 1:
-                    #         ymin = M_planning.y_max - delta_y
-                    #         ymax = M_planning.y_max + delta_y
-                    #     else:
-                    #         ymin = M_planning.y_min - delta_y
-                    #         ymax = M_planning.y_min + delta_y
-                    # if abs(v_pred[0]) == 1:
-                    #     delta_x = 5.0
-                    #     delta_y = 0.0
-                    #     ymin = M_planning.y_min
-                    #     ymax = M_planning.y_max
-                    #     if v_pred[0] == 1:
-                    #         xmin = M_planning.x_max - delta_x
-                    #         xmax = M_planning.x_max + delta_x
-                    #     else:
-                    #         xmin = M_planning.x_min - delta_x
-                    #         xmax = M_planning.x_min + delta_x
-
-                    # con_range = np.array([[xmin, ymin], [xmax, ymin],
-                    #                       [xmax, ymax], [xmin, ymax]])
-                    # particle_range.append(con_range)
                     particle_range = M_planning.main_line_perception(
                         Z_obs, v_pred, Movable_objects
                     )
@@ -1736,43 +2094,13 @@ if __name__ == "__main__":
                             particles_filter, weights_filter, particles_remain
                         )
 
-                    # ##更新图像
-                    # img_path = f'socket_cropped.jpg'
-                    # scene_plot_with_image(img_path, scene, object_mask, xs, ys, obstacles, particles, weights)
                     z = 1
-                    ##保存相关数据进行分析
-                    np.savez(
-                        os.path.join(
-                            folder, f"contact_slam_N1data_2511101625_{str(num)}.npz"
-                        ),
-                        particles=particles,
-                        weights=weights,
-                        Pose_list=Pos_list,
-                        particles_filter=particles_filter,
-                        Z_list=Z_obs,
-                        v_pred=v_pred,
-                        scene=scene,
-                        xs=xs,
-                        ys=ys,
-                    )
 
                 if z_obs == 1:
                     # 更新一下物体的位置
                     object_mask, object_pos = M_planning.add_movable_objects(
                         Movable_objects, ref_point
                     )
-                    # # 潜在的接触对
-                    # _, _, poten_con_pairs = M_planning.select_pairs(v_pred, movable_objects)
-                    # # 更新粒子分布(粒子分布首先根据上一次筛选得到的范围平移后再与新的潜在接触范围做交集)
-                    # particle_range = []
-                    # for con_pair in poten_con_pairs:
-                    #     xmin, ymin = con_pair[2][0]
-                    #     xmax, ymax = con_pair[2][1]
-                    #     if abs(xmin - xmax)<0.5: xmin -= 1.5; xmax += 1.5
-                    #     if abs(ymin - ymax)<0.5: ymin -= 1.5; ymax += 1.5  # 防止轮廓退化成一条直线
-                    #     con_range = np.array([[xmin, ymin], [xmax, ymin],
-                    #                           [xmax, ymax], [xmin, ymax]])
-                    #     particle_range.append(con_range)
                     particle_range = M_planning.main_line_perception(
                         Z_obs, v_pred, Movable_objects
                     )
@@ -1809,25 +2137,7 @@ if __name__ == "__main__":
                             particles_filter, weights_filter, particles_remain
                         )
 
-                    # ##更新图像
-                    # img_path = f'socket_cropped.jpg'
-                    # scene_plot_with_image(img_path, scene, object_mask, xs, ys, obstacles, particles, weights)
                     z = 1
-                    ##保存相关数据进行分析
-                    np.savez(
-                        os.path.join(
-                            folder, f"contact_slam_N1data_2511101625_{str(num)}.npz"
-                        ),
-                        particles=particles,
-                        weights=weights,
-                        Pose_list=Pos_list,
-                        particles_filter=particles_filter,
-                        Z_list=Z_obs,
-                        v_pred=v_pred,
-                        scene=scene,
-                        xs=xs,
-                        ys=ys,
-                    )
 
             ## 针对运动到场景边缘外的情况，回退到上一次运动前（对照组）
             if Z_obs[-1] == -1:
@@ -1863,11 +2173,43 @@ if __name__ == "__main__":
             else:
                 particles_now = particles
 
+            num += 1
+            ##绘图
+            img_path = f"socket_cropped.jpg"
+            scene_plot_with_image(
+                img_path,
+                scene,
+                object_mask,
+                xs,
+                ys,
+                obstacles,
+                obstacles,
+                particles,
+                weights,
+                names=f"contact_slam_N{Z_obs[-1]}_2511101625_{str(num)}.png",
+            )
+            ##保存相关数据进行分析
+            np.savez(
+                os.path.join(
+                    folder, f"contact_slam_N{Z_obs[-1]}data_2511101625_{str(num)}.npz"
+                ),
+                particles=particles_now,
+                weights=weights,
+                Pose_list=Pos_list,
+                particles_filter=particles_filter,
+                Z_list=Z_obs,
+                v_pred=v_pred,
+                scene=scene,
+                object_mask=object_mask,
+                xs=xs,
+                ys=ys,
+            )
+
             # 检测峰值，选择相应的方向
             peaks = M_planning.find_local_maximum(particles, weights, radius=5)
             print("len(peaks)=", len(peaks))
-            v_pred = M_planning.gain_information(
-                peaks, Movable_objects, delta=0.1
+            gain, v_pred = M_planning.gain_information(
+                peaks, Movable_objects, delta=0.5
             )  ## 对照组，只有action entropy
             centers, clusters = M_planning.extract_circle_clusters(
                 particles_now, radius=1.0
@@ -1880,45 +2222,3 @@ if __name__ == "__main__":
                 weights=weights,
                 hole_pose=hole_pose,
             )
-
-            ## 第一实验组（action+distance熵）,直接选择v_pred
-
-            ## 第二实验组（三种熵进行比较）
-            if (
-                max(
-                    np.max(M_planning.Gain_information_optimize),
-                    np.max(M_planning.Gain_information),
-                )
-                > 0.7
-            ):
-                if np.max(M_planning.Gain_information_optimize) >= np.max(
-                    M_planning.Gain_information
-                ):
-                    print(
-                        f"The max entropy is {np.max(M_planning.Gain_information_optimize)}, the chosen cluster is {pose_ref}"
-                    )
-                    v_pred = np.array([0, 1])
-                    particles = particle_left
-                    weights = weight_left
-                    # 更新一下物体的位置
-                    if Z_obs[-1] == -1:
-                        ref_point -= shift
-                    ref_point += hole_pose + np.array([0.0, -3.0]) - pose_ref
-                    object_mask, object_pos = M_planning.add_movable_objects(
-                        Movable_objects, ref_point
-                    )
-                else:
-                    print(
-                        f"The max entropy is {np.max(M_planning.Gain_information)}, the chosen velocity is {v_pred}"
-                    )
-            else:
-                print(
-                    f"The DIs_entropy is: {M_planning.Dis_var}, The current velocity is: {v_pred}"
-                )
-
-            num += 1
-        ##绘图
-        img_path = f"socket_cropped.jpg"
-        scene_plot_with_image(
-            img_path, scene, object_mask, xs, ys, obstacles, particles, weights
-        )
