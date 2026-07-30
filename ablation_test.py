@@ -17,184 +17,8 @@ from scipy.spatial.transform import Rotation as R, Slerp
 from scipy.spatial import KDTree
 
 """
-完善主动跳岛探索后的代码，可以实现插孔的消融实验
+完善主动跳岛探索后的代码，拟实现边定位边修正图
 """
-
-
-def transform_obstacles_with_bounded_perturbation(
-    obstacles,
-    translate_ratio=0.1,
-    edge_ratio=0.1,
-    max_scale_attempts=300,
-    max_translate_attempts=400,
-    rng=None,
-):
-    """对障碍物多边形做受限平移、受限边伸缩，并尽量消除多边形间相交。"""
-    rng = np.random.default_rng() if rng is None else rng
-
-    def _normalize_vertices(vertices):
-        vertices = np.asarray(vertices, dtype=float)
-        if len(vertices) >= 2 and np.allclose(vertices[0], vertices[-1]):
-            vertices = vertices[:-1]
-        return vertices
-
-    def _sample_edge_scales(edges):
-        edge_count = len(edges)
-        if edge_count < 3:
-            return np.ones(edge_count, dtype=float)
-
-        lower = 1.0 - edge_ratio
-        upper = 1.0 + edge_ratio
-
-        best_pair = None
-        best_det = 0.0
-        for i in range(edge_count):
-            for j in range(i + 1, edge_count):
-                det = abs(edges[i][0] * edges[j][1] - edges[i][1] * edges[j][0])
-                if det > best_det:
-                    best_det = det
-                    best_pair = (i, j)
-
-        if best_pair is None or best_det < 1e-12:
-            return None
-
-        idx_a, idx_b = best_pair
-        mat = np.column_stack((edges[idx_a], edges[idx_b]))
-        other_indices = [idx for idx in range(edge_count) if idx not in best_pair]
-
-        for _ in range(max_scale_attempts):
-            scales = np.ones(edge_count, dtype=float)
-            if other_indices:
-                scales[other_indices] = rng.uniform(
-                    lower, upper, size=len(other_indices)
-                )
-                residual = -np.sum(
-                    edges[other_indices] * scales[other_indices][:, None], axis=0
-                )
-            else:
-                residual = np.zeros(2, dtype=float)
-
-            try:
-                sol = np.linalg.solve(mat, residual)
-            except np.linalg.LinAlgError:
-                return None
-
-            if np.all(sol >= lower) and np.all(sol <= upper):
-                scales[idx_a] = sol[0]
-                scales[idx_b] = sol[1]
-                return scales
-
-        return None
-
-    def _rebuild_polygon(vertices, edges, scales):
-        rebuilt = np.empty_like(vertices)
-        rebuilt[0] = vertices[0]
-        for idx in range(1, len(vertices)):
-            rebuilt[idx] = rebuilt[idx - 1] + scales[idx - 1] * edges[idx - 1]
-        return rebuilt
-
-    def _is_valid_polygon(vertices):
-        poly = Polygon(vertices)
-        return poly.is_valid and poly.area > 1e-9
-
-    transformed = []
-    accepted_polygons = []
-
-    for obstacle in obstacles:
-        vertices = _normalize_vertices(obstacle)
-        if len(vertices) < 3:
-            transformed.append(vertices.copy())
-            accepted_polygons.append(Polygon(vertices))
-            continue
-
-        edges = np.roll(vertices, -1, axis=0) - vertices
-        max_size = max(np.ptp(vertices[:, 0]), np.ptp(vertices[:, 1]))
-        translate_limit = translate_ratio * max_size
-
-        scaled_vertices = None
-        for _ in range(max_scale_attempts):
-            scales = _sample_edge_scales(edges)
-            if scales is None:
-                break
-            candidate_vertices = _rebuild_polygon(vertices, edges, scales)
-            if _is_valid_polygon(candidate_vertices):
-                scaled_vertices = candidate_vertices
-                break
-
-        if scaled_vertices is None:
-            scaled_vertices = vertices.copy()
-
-        base_polygon = Polygon(scaled_vertices)
-        if not base_polygon.is_valid or base_polygon.area <= 0:
-            scaled_vertices = vertices.copy()
-            base_polygon = Polygon(scaled_vertices)
-
-        best_vertices = scaled_vertices.copy()
-        best_polygon = base_polygon
-
-        if translate_limit <= 0:
-            accepted_polygons.append(best_polygon)
-            transformed.append(best_vertices)
-            continue
-
-        collision_polygons = accepted_polygons.copy()
-        for _ in range(max_translate_attempts):
-            angle = rng.uniform(0.0, 2.0 * np.pi)
-            radius = translate_limit * np.sqrt(rng.uniform(0.0, 1.0))
-            shift = np.array(
-                [radius * np.cos(angle), radius * np.sin(angle)], dtype=float
-            )
-            candidate_vertices = scaled_vertices + shift
-            candidate_polygon = Polygon(candidate_vertices)
-            if not candidate_polygon.is_valid or candidate_polygon.area <= 0:
-                continue
-            if any(candidate_polygon.intersects(other) for other in collision_polygons):
-                continue
-            best_vertices = candidate_vertices
-            best_polygon = candidate_polygon
-            break
-        else:
-            centroid = np.array(base_polygon.centroid.coords[0], dtype=float)
-            directions = []
-            for other in collision_polygons:
-                other_centroid = np.array(other.centroid.coords[0], dtype=float)
-                direction = centroid - other_centroid
-                norm = np.linalg.norm(direction)
-                if norm > 1e-9:
-                    directions.append(direction / norm)
-            directions.extend(
-                [
-                    np.array([1.0, 0.0]),
-                    np.array([-1.0, 0.0]),
-                    np.array([0.0, 1.0]),
-                    np.array([0.0, -1.0]),
-                ]
-            )
-
-            for direction in directions:
-                for radius in np.linspace(0.0, translate_limit, 40):
-                    shift = direction * radius
-                    candidate_vertices = scaled_vertices + shift
-                    candidate_polygon = Polygon(candidate_vertices)
-                    if not candidate_polygon.is_valid or candidate_polygon.area <= 0:
-                        continue
-                    if any(
-                        candidate_polygon.intersects(other)
-                        for other in collision_polygons
-                    ):
-                        continue
-                    best_vertices = candidate_vertices
-                    best_polygon = candidate_polygon
-                    break
-                if not any(
-                    best_polygon.intersects(other) for other in collision_polygons
-                ):
-                    break
-
-        accepted_polygons.append(best_polygon)
-        transformed.append(best_vertices)
-
-    return transformed
 
 
 class Motion_planning:
@@ -1119,6 +943,7 @@ class Motion_planning:
 
             self.Gain_information = np.array(self.Gain_information).reshape(4, -1)
             self.Dis_var = np.array(self.Dis_var).reshape(4, -1)
+            # ##对照组（仅有信息增益）
             # v_pred_2 = self.actions[
             #     np.argmax(self.Gain_information)
             # ]  # 找到 a 中最大值的索引
@@ -1126,6 +951,7 @@ class Motion_planning:
             # print(
             #     f"The Gain_information is: {self.Gain_information}, The current velocity is: {v_pred_2}"
             # )
+            # return np.max(self.Gain_information), v_pred_2
             if np.max(self.Gain_information) < np.max(self.Dis_var):
                 print(
                     f"The Gain_information is: {self.Gain_information},The all entropy are low and we choose the distance flag."
@@ -1925,7 +1751,7 @@ if __name__ == "__main__":
 
     num = 0
     explored_contours = set()
-    for p in range(0, len(ref_points)):
+    for p in range(8, 16):
         # 每次迭代的新目录
         folder = f"two-pin-circle test_exp/ablation_control_{p}"  # 或用时间戳
         # folder = datetime.now().strftime("run_%Y%m%d_%H%M%S")
@@ -1974,10 +1800,10 @@ if __name__ == "__main__":
                 names=f"contact_slam_N{Z_obs[-1]if Z_obs is not None else 0}_2511101625_{str(num)}.png",
             )
             ##选择运动方向
-            ## 第一实验组（action+distance熵）,直接选择v_pred
-
-            ## 第二实验组（三种熵进行比较）
             if num != 0:
+                ## 第一实验组（action+distance熵）,直接选择v_pred
+                # print(f"The max entropy is {gain}, the chosen velocity is {v_pred}")
+                ## 第二实验组（三种熵进行比较）
                 if np.max(M_planning.Gain_information_optimize) >= gain:
                     print(
                         f"The max entropy is {np.max(M_planning.Gain_information_optimize)}, the chosen cluster is {pose_ref}"

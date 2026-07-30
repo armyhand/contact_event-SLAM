@@ -1617,25 +1617,25 @@ def scene_plot_with_image(
         )
         ax.add_patch(polygon)
 
-    # 叠加：可移动物体的红色半透明网格
-    # 构造 RGBA 覆盖层：红色(1,0,0,alpha)；非掩码处 alpha=0
-    overlay = np.zeros((object_mask.shape[0], object_mask.shape[1], 4), dtype=float)
-    overlay[..., 0] = 1.0  # R
-    overlay[..., 3] = object_mask * 0.55  # Alpha
-    ax.imshow(
-        overlay,
-        extent=[xs[0], xs[-1], ys[0], ys[-1]],
-        origin="lower",
-        interpolation="nearest",
-    )
+    # # 叠加：可移动物体的红色半透明网格
+    # # 构造 RGBA 覆盖层：红色(1,0,0,alpha)；非掩码处 alpha=0
+    # overlay = np.zeros((object_mask.shape[0], object_mask.shape[1], 4), dtype=float)
+    # overlay[..., 0] = 1.0  # R
+    # overlay[..., 3] = object_mask * 0.55  # Alpha
+    # ax.imshow(
+    #     overlay,
+    #     extent=[xs[0], xs[-1], ys[0], ys[-1]],
+    #     origin="lower",
+    #     interpolation="nearest",
+    # )
 
     plt.tight_layout()
 
-    # 绘制粒子分布
-    sc = ax.scatter(particles[:, 0], particles[:, 1], c=weights, cmap="coolwarm", s=10)
-    # sc = ax.scatter(
-    #     particles[:, 0], particles[:, 1],
-    #     c='b', s=10
+    # # 绘制粒子分布
+    # sc = ax.scatter(particles[:, 0], particles[:, 1], c=weights, cmap="coolwarm", s=10)
+    # # sc = ax.scatter(
+    # #     particles[:, 0], particles[:, 1],
+    # #     c='b', s=10
     # )
 
     # 统一坐标范围为离散场景的范围
@@ -2050,89 +2050,91 @@ def refine_obstacles_ref_by_contact_new(
             target_contour = target_contour + axis_shift
         else:
             print(f"该 axis 已经被锁定，使用局部平移，平移距离为 {axis_shift}")
-            all_indices = set()
-            for line in obs_edges:
-                best_score = np.inf
-                best_edge_idx = None
-                for edge_idx, edge in contour_edges(target_contour):
-                    score = edge_gap(edge, line)
-                    score += 0.1 * edge_direction_penalty(edge, line)
-                    if score < best_score:
-                        best_score = score
-                        best_edge_idx = edge_idx
-                if best_edge_idx is not None:
-                    edge_end_idx = (best_edge_idx + 1) % len(target_contour)
-                    all_indices.add(best_edge_idx)
-                    all_indices.add(edge_end_idx)
-            # --- 优化求解：垂直方向位移使关联边方向向量不变 ---
-            N = len(target_contour)
-            perp = 1 - axis  # 垂直轴
-            # 各顶点沿 axis 方向的已知位移
-            dx = np.zeros(N, dtype=float)
-            for idx in all_indices:
-                dx[idx] = axis_shift[axis]
-            # 构建线性最小二乘系统: 对 every edge (i, j) connected to all_indices
-            #   (dy_j - dy_i) ≈ (dx_j - dx_i) * (y_j - y_i) / (x_j - x_i)
-            rows = []
-            targets = []
-            for i in range(N):
-                j_ = (i + 1) % N
-                # 关联边：至少一个端点在 all_indices 中
-                if i in all_indices or j_ in all_indices:
-                    dx_diff = dx[j_] - dx[i]
-                    # 仅当轴方向位移存在差异且分母非零时引入约束
-                    if abs(dx_diff) > 1e-12:
-                        delta_axis = float(
-                            target_contour[j_, axis] - target_contour[i, axis]
-                        )
-                        if abs(delta_axis) > 1e-12:
-                            row = np.zeros(N, dtype=float)
-                            row[i] = -1.0
-                            row[j_] = 1.0
-                            rows.append(row)
-                            delta_perp = float(
-                                target_contour[j_, perp] - target_contour[i, perp]
-                            )
-                            targets.append(dx_diff * delta_perp / delta_axis)
-            # 正则化最小二乘：对 all_indices 与 非 all_indices 的垂直位移分别惩罚
-            if len(rows) > 0:
-                A_eq = np.vstack(rows)  # M x N
-                b_eq = np.array(targets, dtype=float)  # M
-                # 正则项: 不希望 dy 偏离 0
-                w_all = 1.0  # all_indices 端点的垂直惩罚权重
-                w_other = 0.5  # 非 all_indices 端点的惩罚权重
-                w = np.where(
-                    np.array([idx in all_indices for idx in range(N)]), w_all, w_other
-                )
-                # 求解: min ||A_eq @ dy - b_eq||^2 + ||diag(w) @ dy||^2
-                # 正规方程: (A_eq^T A_eq + W^2) dy = A_eq^T b_eq
-                W2 = np.diag(w * w)
-                lhs = A_eq.T @ A_eq + W2
-                rhs = A_eq.T @ b_eq
-                # 处理秩亏 (常数向量在 A_eq 的零空间中)
-                try:
-                    dy, residuals, rank, sv = np.linalg.lstsq(lhs, rhs, rcond=None)
-                except np.linalg.LinAlgError:
-                    dy = np.zeros(N, dtype=float)
-            else:
-                dy = np.zeros(N, dtype=float)
-            # 施加位移
-            target_contour[:, axis] += dx
-            target_contour[:, perp] += dy
+            target_contour[target_edge_idx] += axis_shift
+            target_contour[edge_end_idx] += axis_shift
+            # all_indices = set()
+            # for line in obs_edges:
+            #     best_score = np.inf
+            #     best_edge_idx = None
+            #     for edge_idx, edge in contour_edges(target_contour):
+            #         score = edge_gap(edge, line)
+            #         score += 0.1 * edge_direction_penalty(edge, line)
+            #         if score < best_score:
+            #             best_score = score
+            #             best_edge_idx = edge_idx
+            #     if best_edge_idx is not None:
+            #         edge_end_idx = (best_edge_idx + 1) % len(target_contour)
+            #         all_indices.add(best_edge_idx)
+            #         all_indices.add(edge_end_idx)
+            # # --- 优化求解：垂直方向位移使关联边方向向量不变 ---
+            # N = len(target_contour)
+            # perp = 1 - axis  # 垂直轴
+            # # 各顶点沿 axis 方向的已知位移
+            # dx = np.zeros(N, dtype=float)
+            # for idx in all_indices:
+            #     dx[idx] = axis_shift[axis]
+            # # 构建线性最小二乘系统: 对 every edge (i, j) connected to all_indices
+            # #   (dy_j - dy_i) ≈ (dx_j - dx_i) * (y_j - y_i) / (x_j - x_i)
+            # rows = []
+            # targets = []
+            # for i in range(N):
+            #     j_ = (i + 1) % N
+            #     # 关联边：至少一个端点在 all_indices 中
+            #     if i in all_indices or j_ in all_indices:
+            #         dx_diff = dx[j_] - dx[i]
+            #         # 仅当轴方向位移存在差异且分母非零时引入约束
+            #         if abs(dx_diff) > 1e-12:
+            #             delta_axis = float(
+            #                 target_contour[j_, axis] - target_contour[i, axis]
+            #             )
+            #             if abs(delta_axis) > 1e-12:
+            #                 row = np.zeros(N, dtype=float)
+            #                 row[i] = -1.0
+            #                 row[j_] = 1.0
+            #                 rows.append(row)
+            #                 delta_perp = float(
+            #                     target_contour[j_, perp] - target_contour[i, perp]
+            #                 )
+            #                 targets.append(dx_diff * delta_perp / delta_axis)
+            # # 正则化最小二乘：对 all_indices 与 非 all_indices 的垂直位移分别惩罚
+            # if len(rows) > 0:
+            #     A_eq = np.vstack(rows)  # M x N
+            #     b_eq = np.array(targets, dtype=float)  # M
+            #     # 正则项: 不希望 dy 偏离 0
+            #     w_all = 1.0  # all_indices 端点的垂直惩罚权重
+            #     w_other = 0.5  # 非 all_indices 端点的惩罚权重
+            #     w = np.where(
+            #         np.array([idx in all_indices for idx in range(N)]), w_all, w_other
+            #     )
+            #     # 求解: min ||A_eq @ dy - b_eq||^2 + ||diag(w) @ dy||^2
+            #     # 正规方程: (A_eq^T A_eq + W^2) dy = A_eq^T b_eq
+            #     W2 = np.diag(w * w)
+            #     lhs = A_eq.T @ A_eq + W2
+            #     rhs = A_eq.T @ b_eq
+            #     # 处理秩亏 (常数向量在 A_eq 的零空间中)
+            #     try:
+            #         dy, residuals, rank, sv = np.linalg.lstsq(lhs, rhs, rcond=None)
+            #     except np.linalg.LinAlgError:
+            #         dy = np.zeros(N, dtype=float)
+            # else:
+            #     dy = np.zeros(N, dtype=float)
+            # # 施加位移
+            # target_contour[:, axis] += dx
+            # target_contour[:, perp] += dy
 
-            constraints = []
-            for edge_idx, fixed_mean in contour_state["axis_edge_history"][axis]:
-                row = np.zeros(len(target_contour), dtype=float)
-                row[edge_idx] += 0.5
-                row[(edge_idx + 1) % len(target_contour)] += 0.5
-                constraints.append((row, fixed_mean))
+            # constraints = []
+            # for edge_idx, fixed_mean in contour_state["axis_edge_history"][axis]:
+            #     row = np.zeros(len(target_contour), dtype=float)
+            #     row[edge_idx] += 0.5
+            #     row[(edge_idx + 1) % len(target_contour)] += 0.5
+            #     constraints.append((row, fixed_mean))
 
-            desired_current_mean = object_edge_mid[axis]
-            constraints.append((current_row, desired_current_mean))
+            # desired_current_mean = object_edge_mid[axis]
+            # constraints.append((current_row, desired_current_mean))
 
-            target_contour[:, axis] = solve_axis_affine_with_constraints(
-                target_axis_values, constraints
-            )
+            # target_contour[:, axis] = solve_axis_affine_with_constraints(
+            #     target_axis_values, constraints
+            # )
     else:
         print(f"接触边的轴向均值不需要调整，保持原状。")
 
@@ -2225,11 +2227,11 @@ if __name__ == "__main__":
         loaded = pickle.load(f)
     obstacles = loaded
     # obstacles_ref = transform_obstacles_with_bounded_perturbation(obstacles, translate_ratio=0.2)
-    pkl_path = f"./socket_contours_2_ref.pkl"
+    pkl_path = f"three pin test_exp/ablation_control_25/socket_contours_2_ref.pkl"
     with open(pkl_path, "rb") as f:
         loaded = pickle.load(f)
     obstacles_ref = loaded
-    folder = f"three pin test_4"
+    folder = f"extra_pictures"
     os.makedirs(folder, exist_ok=True)
     scene_plot_obstacles_compare(obstacles, obstacles_ref)
     # R = np.array([[0, -1], [1, 0]])  # 顺时针90°旋转矩阵
@@ -2246,10 +2248,38 @@ if __name__ == "__main__":
     #         [[5.5, -3.2], [7, -3.2], [7, 3.2], [5.5, 3.2]], dtype=float
     #     ),  # 小矩形2（与1相对位置固定）
     # ]
+    # Movable_objects = [
+    #     np.array(
+    #         [[-0.75, 5.98 - 11.38], [0.75, 5.98 - 11.38], [0.75, 0.0], [-0.75, 0.0]]
+    #     )
+    # ] ##三脚插销
     Movable_objects = [
         np.array(
-            [[-0.75, 5.98 - 11.38], [0.75, 5.98 - 11.38], [0.75, 0.0], [-0.75, 0.0]]
-        )
+            [
+                [11.8, 0.0],
+                [11.126346, 1.626346],
+                [9.5, 2.3],
+                [7.873654, 1.626346],
+                [7.2, 0.0],
+                [7.873654, -1.626346],
+                [9.5, -2.3],
+                [11.126346, -1.626346],
+            ],
+            dtype=float,
+        ),  # 小多边形1
+        np.array(
+            [
+                [-7.2, 0.0],
+                [-7.873654, 1.626346],
+                [-9.5, 2.3],
+                [-11.126346, 1.626346],
+                [-11.8, 0.0],
+                [-11.126346, -1.626346],
+                [-9.5, -2.3],
+                [-7.873654, -1.626346],
+            ],
+            dtype=float,
+        ),  # 小多边形2（与1相对位置固定）
     ]
     R = np.array([[0, -1], [1, 0]])  # 顺时针90°旋转矩阵
     rotated = []
@@ -2258,20 +2288,24 @@ if __name__ == "__main__":
     Movable_objects = rotated
     movable_objects = Movable_objects
     # 构建仿真场景
-    curve_dis = np.array(
-        [25.35, 31.11, 16.5, 16.5]
-    )  ##[delta_x_min,delta_x_max, delta_y_min, delta_y_max]
+    # curve_dis = np.array(
+    #     [25.35, 31.11, 16.5, 16.5]
+    # )  ##[delta_x_min,delta_x_max, delta_y_min, delta_y_max]
     # # 二指插座的间距设置
     # curve_dis = np.array(
     #     [9.4, 34.3, 14.75, 14.75]
     # )  ##[delta_x_min,delta_x_max, delta_y_min, delta_y_max]
+    ## 二指圆孔插座间距设置
+    curve_dis = np.array(
+        [8.6, 33.5, 19.55, 19.55]
+    )  ##[delta_x_min,delta_x_max, delta_y_min, delta_y_max]
     M_planning = Motion_planning(d=0.25, padding=curve_dis)
     scene, xs, ys = M_planning.discretize_scene(obstacles)
     ## 插座的边界位置（pin的狭义运动区域），相对于obstacles
     curve_socket_dis = np.array([6.2, 31.1, 7.75, 7.75])
     socket_curve = M_planning.socket_curve(curve_socket_dis)
-    hole_pose = np.array([-45.83 - 6.25, 23.55])  ##三脚插座的位置
-    # hole_pose = np.array([-54.0, 23.55])  ##二脚插座位置
+    # hole_pose = np.array([-45.83 - 6.25, 23.55])  ##三脚插座的位置
+    hole_pose = np.array([-54.0, 23.55])  ##二脚插座/二指圆孔插座位置
     # ref_point = np.array([np.random.uniform(socket_curve[0], socket_curve[1]),
     #                  np.random.uniform(socket_curve[2], socket_curve[3])]) ##这里的参考点坐标要随即在场景中选取
     ref_points = np.array(
@@ -2312,9 +2346,9 @@ if __name__ == "__main__":
 
     num = 0
     explored_contours = set()
-    for p in range(0, len(ref_points)):
+    for p in range(26, len(ref_points)):
         # 每次迭代的新目录
-        folder = f"three pin test_4/ablation_control_{p}"  # 或用时间戳
+        folder = f"extra_pictures/ablation_control_{p}"  # 或用时间戳
         # folder = datetime.now().strftime("run_%Y%m%d_%H%M%S")
         os.makedirs(folder, exist_ok=True)
 
@@ -2724,44 +2758,44 @@ if __name__ == "__main__":
                                     print(
                                         f"接触到障碍物，ref_point={ref_point}, action={current_action}"
                                     )
-                                    # 模拟接触发生时，机械臂末端比物体会多移动一段距离
-                                    distance = 0.1
-                                    if current_action[0] == -1:
-                                        distance = (
-                                            1.5 + np.random.uniform(0.99, 0.11)
-                                            if abs(Pos_list[-1][0] - Pos_list[0][0])
-                                            > 1.5
-                                            else 0.1
-                                        )
-                                    elif current_action[0] == 1:
-                                        distance = (
-                                            0.26 + np.random.uniform(0.99, 0.11)
-                                            if abs(Pos_list[-1][0] - Pos_list[0][0])
-                                            > 0.26
-                                            else 0.1
-                                        )
-                                    elif current_action[1] == 1:
-                                        distance = (
-                                            np.random.uniform(0.99, 0.11)
-                                            if abs(Pos_list[-1][1] - Pos_list[0][1])
-                                            > 0.1
-                                            else 0.1
-                                        )
-                                    elif current_action[1] == -1:
-                                        distance = (
-                                            0.4 + np.random.uniform(0.99, 0.11)
-                                            if abs(Pos_list[-1][1] - Pos_list[0][1])
-                                            > 0.4
-                                            else 0.1
-                                        )
-                                    while distance > 0:
-                                        ref_point += (
-                                            current_action * M_planning.d
-                                        )  # 每步的步长为d
-                                        Pos_list = np.append(
-                                            Pos_list, ref_point
-                                        ).reshape(-1, 2)
-                                        distance -= M_planning.d
+                                    # # 模拟接触发生时，机械臂末端比物体会多移动一段距离
+                                    # distance = 0.1
+                                    # if current_action[0] == -1:
+                                    #     distance = (
+                                    #         1.5 + np.random.uniform(0.99, 0.11)
+                                    #         if abs(Pos_list[-1][0] - Pos_list[0][0])
+                                    #         > 1.5
+                                    #         else 0.1
+                                    #     )
+                                    # elif current_action[0] == 1:
+                                    #     distance = (
+                                    #         0.26 + np.random.uniform(0.99, 0.11)
+                                    #         if abs(Pos_list[-1][0] - Pos_list[0][0])
+                                    #         > 0.26
+                                    #         else 0.1
+                                    #     )
+                                    # elif current_action[1] == 1:
+                                    #     distance = (
+                                    #         np.random.uniform(0.99, 0.11)
+                                    #         if abs(Pos_list[-1][1] - Pos_list[0][1])
+                                    #         > 0.1
+                                    #         else 0.1
+                                    #     )
+                                    # elif current_action[1] == -1:
+                                    #     distance = (
+                                    #         0.4 + np.random.uniform(0.99, 0.11)
+                                    #         if abs(Pos_list[-1][1] - Pos_list[0][1])
+                                    #         > 0.4
+                                    #         else 0.1
+                                    #     )
+                                    # while distance > 0:
+                                    #     ref_point += (
+                                    #         current_action * M_planning.d
+                                    #     )  # 每步的步长为d
+                                    #     Pos_list = np.append(
+                                    #         Pos_list, ref_point
+                                    #     ).reshape(-1, 2)
+                                    #     distance -= M_planning.d
 
                                     contact_obj_line = obj_line
                                     contact_obs_line = obs_line
@@ -2884,44 +2918,44 @@ if __name__ == "__main__":
                                         f"接触到待探索轮廓 {nearest_contour_idx}, "
                                         f"ref_point={ref_point}, action={current_action}"
                                     )
-                                    # 模拟接触发生时，机械臂末端比物体会多移动一段距离
-                                    distance = 0.1
-                                    if current_action[0] == -1:
-                                        distance = (
-                                            1.5 + np.random.uniform(0.99, 0.11)
-                                            if abs(Pos_list[-1][0] - Pos_list[0][0])
-                                            > 1.5
-                                            else 0.1
-                                        )
-                                    elif current_action[0] == 1:
-                                        distance = (
-                                            0.26 + np.random.uniform(0.99, 0.11)
-                                            if abs(Pos_list[-1][0] - Pos_list[0][0])
-                                            > 0.26
-                                            else 0.1
-                                        )
-                                    elif current_action[1] == 1:
-                                        distance = (
-                                            np.random.uniform(0.99, 0.11)
-                                            if abs(Pos_list[-1][1] - Pos_list[0][1])
-                                            > 0.1
-                                            else 0.1
-                                        )
-                                    elif current_action[1] == -1:
-                                        distance = (
-                                            0.4 + np.random.uniform(0.99, 0.11)
-                                            if abs(Pos_list[-1][1] - Pos_list[0][1])
-                                            > 0.4
-                                            else 0.1
-                                        )
-                                    while distance > 0:
-                                        ref_point += (
-                                            current_action * M_planning.d
-                                        )  # 每步的步长为d
-                                        Pos_list = np.append(
-                                            Pos_list, ref_point
-                                        ).reshape(-1, 2)
-                                        distance -= M_planning.d
+                                    # # 模拟接触发生时，机械臂末端比物体会多移动一段距离
+                                    # distance = 0.1
+                                    # if current_action[0] == -1:
+                                    #     distance = (
+                                    #         1.5 + np.random.uniform(0.99, 0.11)
+                                    #         if abs(Pos_list[-1][0] - Pos_list[0][0])
+                                    #         > 1.5
+                                    #         else 0.1
+                                    #     )
+                                    # elif current_action[0] == 1:
+                                    #     distance = (
+                                    #         0.26 + np.random.uniform(0.99, 0.11)
+                                    #         if abs(Pos_list[-1][0] - Pos_list[0][0])
+                                    #         > 0.26
+                                    #         else 0.1
+                                    #     )
+                                    # elif current_action[1] == 1:
+                                    #     distance = (
+                                    #         np.random.uniform(0.99, 0.11)
+                                    #         if abs(Pos_list[-1][1] - Pos_list[0][1])
+                                    #         > 0.1
+                                    #         else 0.1
+                                    #     )
+                                    # elif current_action[1] == -1:
+                                    #     distance = (
+                                    #         0.4 + np.random.uniform(0.99, 0.11)
+                                    #         if abs(Pos_list[-1][1] - Pos_list[0][1])
+                                    #         > 0.4
+                                    #         else 0.1
+                                    #     )
+                                    # while distance > 0:
+                                    #     ref_point += (
+                                    #         current_action * M_planning.d
+                                    #     )  # 每步的步长为d
+                                    #     Pos_list = np.append(
+                                    #         Pos_list, ref_point
+                                    #     ).reshape(-1, 2)
+                                    #     distance -= M_planning.d
 
                                     contact_obj_line = obj_line
                                     contact_obs_line = obs_line
@@ -3007,38 +3041,38 @@ if __name__ == "__main__":
                             print(
                                 f"接触到障碍物，ref_point={ref_point}, action={current_action}"
                             )
-                            # 模拟接触发生时，机械臂末端比物体会多移动一段距离
-                            distance = 0.1
-                            if current_action[0] == -1:
-                                distance = (
-                                    1.5 + np.random.uniform(0.99, 0.11)
-                                    if abs(Pos_list[-1][0] - Pos_list[0][0]) > 1.5
-                                    else 0.1
-                                )
-                            elif current_action[0] == 1:
-                                distance = (
-                                    0.26 + np.random.uniform(0.99, 0.11)
-                                    if abs(Pos_list[-1][0] - Pos_list[0][0]) > 0.26
-                                    else 0.1
-                                )
-                            elif current_action[1] == 1:
-                                distance = (
-                                    np.random.uniform(0.99, 0.11)
-                                    if abs(Pos_list[-1][1] - Pos_list[0][1]) > 0.1
-                                    else 0.1
-                                )
-                            elif current_action[1] == -1:
-                                distance = (
-                                    0.4 + np.random.uniform(0.99, 0.11)
-                                    if abs(Pos_list[-1][1] - Pos_list[0][1]) > 0.4
-                                    else 0.1
-                                )
-                            while distance > 0:
-                                ref_point += (
-                                    current_action * M_planning.d
-                                )  # 每步的步长为d
-                                Pos_list = np.append(Pos_list, ref_point).reshape(-1, 2)
-                                distance -= M_planning.d
+                            # # 模拟接触发生时，机械臂末端比物体会多移动一段距离
+                            # distance = 0.1
+                            # if current_action[0] == -1:
+                            #     distance = (
+                            #         1.5 + np.random.uniform(0.99, 0.11)
+                            #         if abs(Pos_list[-1][0] - Pos_list[0][0]) > 1.5
+                            #         else 0.1
+                            #     )
+                            # elif current_action[0] == 1:
+                            #     distance = (
+                            #         0.26 + np.random.uniform(0.99, 0.11)
+                            #         if abs(Pos_list[-1][0] - Pos_list[0][0]) > 0.26
+                            #         else 0.1
+                            #     )
+                            # elif current_action[1] == 1:
+                            #     distance = (
+                            #         np.random.uniform(0.99, 0.11)
+                            #         if abs(Pos_list[-1][1] - Pos_list[0][1]) > 0.1
+                            #         else 0.1
+                            #     )
+                            # elif current_action[1] == -1:
+                            #     distance = (
+                            #         0.4 + np.random.uniform(0.99, 0.11)
+                            #         if abs(Pos_list[-1][1] - Pos_list[0][1]) > 0.4
+                            #         else 0.1
+                            #     )
+                            # while distance > 0:
+                            #     ref_point += (
+                            #         current_action * M_planning.d
+                            #     )  # 每步的步长为d
+                            #     Pos_list = np.append(Pos_list, ref_point).reshape(-1, 2)
+                            #     distance -= M_planning.d
 
                             contact_obj_line = obj_line
                             contact_obs_line = obs_line
@@ -3101,10 +3135,10 @@ if __name__ == "__main__":
             obstacles_ref,
             particles,
             weights,
-            names=f"contact_slam_refincement_2511101625_{str(num)}.png",
+            names=f"contact_slam_mapping_{str(num)}.png",
         )
         ## 保存obstacles_ref到新的pkl文件
         with open(
-            f"three pin test_4/ablation_control_{p}/socket_contours_2_ref.pkl", "wb"
+            f"three pin test_exp/ablation_control_{p}/socket_contours_2_ref.pkl", "wb"
         ) as f:
             pickle.dump(obstacles_ref, f)
