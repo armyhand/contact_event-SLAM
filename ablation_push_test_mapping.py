@@ -1679,42 +1679,42 @@ def scene_plot(
         )
         ax.add_patch(polygon)
 
-    # 叠加：可移动物体的红色半透明网格
-    # 构造 RGBA 覆盖层：红色(1,0,0,alpha)；非掩码处 alpha=0
-    overlay = np.zeros((object_mask.shape[0], object_mask.shape[1], 4), dtype=float)
-    overlay[..., 0] = 1.0  # R
-    overlay[..., 3] = object_mask * 0.55  # Alpha
-    ax.imshow(
-        overlay,
-        extent=[xs[0], xs[-1], ys[0], ys[-1]],
-        origin="lower",
-        interpolation="nearest",
-    )
+    # # 叠加：可移动物体的红色半透明网格
+    # # 构造 RGBA 覆盖层：红色(1,0,0,alpha)；非掩码处 alpha=0
+    # overlay = np.zeros((object_mask.shape[0], object_mask.shape[1], 4), dtype=float)
+    # overlay[..., 0] = 1.0  # R
+    # overlay[..., 3] = object_mask * 0.55  # Alpha
+    # ax.imshow(
+    #     overlay,
+    #     extent=[xs[0], xs[-1], ys[0], ys[-1]],
+    #     origin="lower",
+    #     interpolation="nearest",
+    # )
 
-    # 粒子分布
-    plt.scatter(
-        particles[:, 0],
-        particles[:, 1],
-        c=weights,  # 用归一化权重控制颜色
-        cmap="coolwarm",
-        s=10,
-        label="Particles",
-    )
+    # # 粒子分布
+    # plt.scatter(
+    #     particles[:, 0],
+    #     particles[:, 1],
+    #     c=weights,  # 用归一化权重控制颜色
+    #     cmap="coolwarm",
+    #     s=10,
+    #     label="Particles",
+    # )
 
     # # 轮廓线（辅助查看形状）
     # for sp in obstacles:
     #     ax.plot(np.r_[sp[:, 0], sp[0, 0]], np.r_[sp[:, 1], sp[0, 1]], 'k-', lw=1.2, label='_nolegend_')
-    for mp in object_pos:
-        ax.plot(
-            np.r_[mp[:, 0], mp[0, 0]],
-            np.r_[mp[:, 1], mp[0, 1]],
-            "r-",
-            lw=1.2,
-            label="_nolegend_",
-        )
+    # for mp in object_pos:
+    #     ax.plot(
+    #         np.r_[mp[:, 0], mp[0, 0]],
+    #         np.r_[mp[:, 1], mp[0, 1]],
+    #         "r-",
+    #         lw=1.2,
+    #         label="_nolegend_",
+    #     )
 
-    # 参考点
-    ax.scatter([ref_point[0]], [ref_point[1]], c="g", s=50, marker="*")
+    # # 参考点
+    # ax.scatter([ref_point[0]], [ref_point[1]], c="g", s=50, marker="*")
 
     ax.set_aspect("equal")
     ax.set_xlabel("X (mm)")
@@ -2413,7 +2413,7 @@ if __name__ == "__main__":
     # )
     # with open(f"./obstacles_ref.pkl", "wb") as f:
     #     pickle.dump(obstacles_ref, f)
-    pkl_path = f"./obstacles_ref.pkl"
+    pkl_path = f"blind-pushing test_2/ablation_control_23/obstacles_ref.pkl"
     with open(pkl_path, "rb") as f:
         loaded = pickle.load(f)
     obstacles_ref = loaded
