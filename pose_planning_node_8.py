@@ -20,7 +20,7 @@ from symforce.values import Values
 from symforce.opt.optimizer import OptimizerParams
 
 """
-socket assembly的探索版本。(拟完善探索完成自主完成轴孔装配的环节)
+socket assembly的探索版本。(完善探索完成自主完成轴孔装配的环节、主动优化)
 20250905情况：姿态的调整（先调姿再调位置）、准确的轮廓框架
 20250907情况：三脚插头的装配完成的判断、跳岛战术的实施
 20251110情况：在探索收敛的情况下自主完成装配代码完善，但是缺乏判断轴孔装配是否成功的代码（已完成）；当探索还不收敛情况下遇到孔区域后的策略（插入+判断是否成功+后续策略）还不完善（已完善）。
@@ -154,12 +154,41 @@ class MinimumJerkPosePlanner(Node):
         # for c in self.obstacles_all:
         #     rotated.append(c @ R.T)  # 矩阵乘法
         # self.obstacles_all = rotated
-        ## 二脚插头
-        self.Movable_objects = [
-             np.array([[-7, -3.2], [-5.5, -3.2], [-5.5, 3.2], [-7, 3.2]], dtype=float),  # 小矩形1
-             np.array([[5.5, -3.2], [7, -3.2], [7, 3.2], [5.5, 3.2]], dtype=float)]  # 小矩形2（与1相对位置固定）
+        # ## 二脚插头
+        # self.Movable_objects = [
+        #      np.array([[-7, -3.2], [-5.5, -3.2], [-5.5, 3.2], [-7, 3.2]], dtype=float),  # 小矩形1
+        #      np.array([[5.5, -3.2], [7, -3.2], [7, 3.2], [5.5, 3.2]], dtype=float)]  # 小矩形2（与1相对位置固定）
         # ## 三脚插头(注意参考点变了，则坐标也要相应改变)
         # self.Movable_objects = [np.array([[-0.75, 5.98-12.38], [0.75, 5.98-12.38], [0.75, 0.0], [-0.75, 0.0]])]
+        ## 二指圆孔插销
+        self.Movable_objects = [
+            np.array(
+                [
+                    [11.8, 0.0],
+                    [11.126346, 1.626346],
+                    [9.5, 2.3],
+                    [7.873654, 1.626346],
+                    [7.2, 0.0],
+                    [7.873654, -1.626346],
+                    [9.5, -2.3],
+                    [11.126346, -1.626346],
+                ],
+                dtype=float,
+            ) + np.array([9.5, -2.3]),  # 小多边形1
+            np.array(
+                [
+                    [-7.2, 0.0],
+                    [-7.873654, 1.626346],
+                    [-9.5, 2.3],
+                    [-11.126346, 1.626346],
+                    [-11.8, 0.0],
+                    [-11.126346, -1.626346],
+                    [-9.5, -2.3],
+                    [-7.873654, -1.626346],
+                ],
+                dtype=float,
+            ) + np.array([9.5, -2.3]),  # 小多边形2（与1相对位置固定）
+        ]
         rotated = []
         for c in self.Movable_objects:
             rotated.append(c @ R.T)  # 矩阵乘法
@@ -179,9 +208,13 @@ class MinimumJerkPosePlanner(Node):
         self.v_pred_pre = np.zeros(0)
         self.F_x_N, self.F_y_N, self.F_z_N = [], [], []
         ## 二指插座的间距设置
-        curve_dis = np.array([9.4, 34.3, 14.75, 14.75])  ##[delta_x_min,delta_x_max, delta_y_min, delta_y_max]
+        # curve_dis = np.array([9.4, 34.3, 14.75, 14.75])  ##[delta_x_min,delta_x_max, delta_y_min, delta_y_max]
         # ## 三指插座的最大运动边界与obstacles的间距设置(在更改了超出距离判定之后的的间距设置)
         # curve_dis = np.array([26.35, 31.11, 16.5, 16.5])  ##[delta_x_min,delta_x_max, delta_y_min, delta_y_max]
+        ## 二指圆孔插座间距设置
+        curve_dis = np.array(
+            [10.8, 31.1, 29.05, 10.05]
+        )  ##[delta_x_min,delta_x_max, delta_y_min, delta_y_max]
         self.M = Motion_planning(d=0.25, padding=curve_dis)  # 这里的单位是mm
         self.scene, self.xs, self.ys = self.M.discretize_scene(self.obstacles_all)
         ## 插座的边界位置（pin的狭义运动区域），相对于obstacles
@@ -189,7 +222,8 @@ class MinimumJerkPosePlanner(Node):
         self.socket_curve = self.M.socket_curve(curve_socket_dis)
         
         # self.hole_pose = np.array([-45.83 - 6.25, 23.55])  ##三脚插座的位置
-        self.hole_pose = np.array([-54.0, 23.55]) ##二脚插座位置
+        # self.hole_pose = np.array([-54.0, 23.55]) ##二脚插座位置
+        self.hole_pose = np.array([-57.2, 13.0])  ##二脚插座位置
 
         self.P_l_sub = self.create_subscription(
             Cloud, '/positions_l', self.on_P_l, 10)
@@ -314,7 +348,7 @@ class MinimumJerkPosePlanner(Node):
                 if any(v is None for v in (self.Fr_r, self.Fr_l, self.Mr_r, self.Mr_l)):
                     self.get_logger().info('Waiting for tac3d information.')
                 else:
-                    if -10 < self.Fr_r[0, 2] < -9 and -10 < self.Fr_l[0, 2] < -9 and self.force_inside_flag == False:
+                    if -10 < self.Fr_r[0, 2] < -8 and -10 < self.Fr_l[0, 2] < -8 and self.force_inside_flag == False:
                         # self.force_inside_flag = True
                         self.start_time = self.get_clock().now().to_msg().sec + \
                                           self.get_clock().now().to_msg().nanosec * 1e-9
@@ -350,7 +384,7 @@ class MinimumJerkPosePlanner(Node):
                         if all(v is not None for v in (self.P_l, self.P_r, self.D_l, self.D_r)):
                             self.sensor_to_tool_permant = geo.M44(1, 0, 0, 0,
                                                                   0, 1, 0, 0,
-                                                                  0, 0, 1, -38.0,
+                                                                  0, 0, 1, -42.0,
                                                                   0, 0, 0, 1)  # 工具坐标系相对于传感器坐标系的转换先验（定值，需事先标定）
                             diff_point_left = self.P_l[self.row_index, :]
                             diff_point_left = np.dot(self.R_left, diff_point_left.T).T
@@ -456,8 +490,25 @@ class MinimumJerkPosePlanner(Node):
                 # 检测峰值，选择相应的方向
                 peaks = self.M.find_local_maximum(self.particles, self.weights, radius=5)
                 self.get_logger().info(f'len(peaks) = {len(peaks)}')
-                self.v_pred = self.M.gain_information(peaks, self.Movable_objects) ##需进一步改进
-                # # ===== 键盘输入移动到gain_information =====
+                _, self.v_pred = self.M.gain_information(peaks, self.Movable_objects) ##需进一步改进
+                print(f'v_pred = {self.v_pred}')
+                # ===== 新增: 等待键盘输入 'q' 才继续 =====
+                self.get_logger().info("Change v_pred and Press 'q' and Enter to continue...")
+                while True:
+                    user_in = input()
+                    if user_in == 'q':
+                        break
+                    elif user_in == 'w':
+                        try:
+                            new_val_0 = float(input("请输入新的 v_pred[0] 值: "))
+                            new_val_1 = float(input("请输入新的 v_pred[1] 值: "))
+                            self.v_pred = np.array([new_val_0, new_val_1])
+                            self.get_logger().info(f"self.v_pred 已更新为 {self.v_pred}")
+                        except ValueError:
+                            self.get_logger().warn("输入无效，请输入数值。")
+                    else:
+                        print("无效输入，请输入 'q' 或 'w'")
+
                 delta = self.v_pred * 0.3  ##这里的单位为m
                 # 加入到轨迹规划中
                 Points_recover.append(start + np.array([0.5 * delta[0], 0.5 * delta[1], 0.0]))
@@ -673,7 +724,7 @@ class MinimumJerkPosePlanner(Node):
                                0.0])
                 self.get_logger().info('move along X+!')
                 # self.mu = 0.17
-                self.mu = 0.17
+                self.mu = 0.3
             elif (self.v_pred == np.array([-1, 0])).all():
                 # qd = np.array([0.0,
                 #                1.0,
@@ -684,7 +735,7 @@ class MinimumJerkPosePlanner(Node):
                                0.0,
                                0.0])
                 self.get_logger().info('move along X-!')
-                self.mu = 0.17
+                self.mu = 0.47
             else:
                 qd = np.array([0.0,
                                1.0,
@@ -854,7 +905,7 @@ class MinimumJerkPosePlanner(Node):
                                                                   weights_5=self.weights)
 
                         # 更新粒子，筛掉低权重粒子
-                        w_thresh = 1.0 / (len(self.particles) * 2)
+                        w_thresh = 1.0 / (len(self.particles) * 3)
                         mask = self.weights >= w_thresh
                         self.particles_filter = self.particles[mask]
                         self.weights_filter = self.weights[mask]
@@ -914,7 +965,7 @@ class MinimumJerkPosePlanner(Node):
                                                               weights_5=self.weights)
 
                     # 更新粒子，筛掉低权重粒子
-                    w_thresh = 1.0 / (len(self.particles) * 2)
+                    w_thresh = 1.0 / (len(self.particles) * 3)
                     mask = self.weights >= w_thresh
                     self.particles_filter = self.particles[mask]
                     self.weights_filter = self.weights[mask]
@@ -945,7 +996,7 @@ class MinimumJerkPosePlanner(Node):
                         self.particles = particles_init - delta_init * 1000
                         ## 综合探索与优化，判断最优的运动方向
                         peaks = self.M.find_local_maximum(particles_init, self.weights, radius=5)
-                        self.v_pred = self.M.gain_information(peaks, self.Movable_objects, delta=1.0)  ##需进一步改进
+                        gain, self.v_pred = self.M.gain_information(peaks, self.Movable_objects, delta=0.1)  ##需进一步改进
                         self.centers, self.clusters = self.M.extract_circle_clusters(self.particles, radius=1.0)
                         # 根据centers候选位置选择
                         pose_ref, particle_left, weight_left = self.M.gain_information_optimize(
@@ -954,19 +1005,14 @@ class MinimumJerkPosePlanner(Node):
                             particles=self.particles,
                             weights=self.weights,
                             hole_pose=self.hole_pose)
-                        if max(np.max(self.M.Gain_information_optimize),
-                               np.max(self.M.Gain_information)) > 0.7:
-                            if np.max(self.M.Gain_information_optimize) >= np.max(self.M.Gain_information):
-                                print(
-                                    f'The max entropy is {np.max(self.M.Gain_information_optimize)}, the chosen cluster is {pose_ref}')
-                                self.N = 5
-                                self.dz_flag = 0
-                            else:
-                                print(
-                                    f'The max entropy is {np.max(self.M.Gain_information)}, the chosen velocity is {self.v_pred}')
+                        if np.max(self.M.Gain_information_optimize) >= gain:
+                            print(
+                                f'The max entropy is {np.max(self.M.Gain_information_optimize)}, the chosen cluster is {pose_ref}')
+                            self.N = 5
+                            self.dz_flag = 0
                         else:
                             print(
-                                f'The DIs_entropy is: {self.M.Dis_var}, The current velocity is: {self.v_pred}')
+                                f'The max entropy is {gain}, the chosen velocity is {self.v_pred}')
 
                     self.get_logger().info('The weights has update!!')
                     self.get_logger().info(f'len(particles)={len(self.particles)}')
@@ -1059,7 +1105,7 @@ class MinimumJerkPosePlanner(Node):
                                                                       weights_5=self.weights)
 
                             # 更新粒子，筛掉低权重粒子
-                            w_thresh = 1.0 / (len(self.particles) * 2)
+                            w_thresh = 1.0 / (len(self.particles) * 3)
                             mask = self.weights >= w_thresh
                             self.particles_filter = self.particles[mask]
                             self.weights_filter = self.weights[mask]
@@ -1084,7 +1130,7 @@ class MinimumJerkPosePlanner(Node):
                                 self.weights /= np.sum(self.weights)
                                 ## 综合探索与优化，判断最优的运动方向
                                 peaks = self.M.find_local_maximum(self.particles, self.weights, radius=5)
-                                self.v_pred = self.M.gain_information(peaks, self.Movable_objects, delta=1.0)  ##需进一步改进
+                                gain, self.v_pred = self.M.gain_information(peaks, self.Movable_objects, delta=0.1)  ##需进一步改进
                                 self.centers, self.clusters = self.M.extract_circle_clusters(self.particles, radius=1.0)
                                 # 根据centers候选位置选择
                                 pose_ref, particle_left, weight_left = self.M.gain_information_optimize(
@@ -1093,19 +1139,14 @@ class MinimumJerkPosePlanner(Node):
                                     particles=self.particles,
                                     weights=self.weights,
                                     hole_pose=self.hole_pose)
-                                if max(np.max(self.M.Gain_information_optimize),
-                                       np.max(self.M.Gain_information)) > 0.7:
-                                    if np.max(self.M.Gain_information_optimize) >= np.max(self.M.Gain_information):
-                                        print(
-                                            f'The max entropy is {np.max(self.M.Gain_information_optimize)}, the chosen cluster is {pose_ref}')
-                                        self.N = 5
-                                        self.dz_flag = 0
-                                    else:
-                                        print(
-                                            f'The max entropy is {np.max(self.M.Gain_information)}, the chosen velocity is {self.v_pred}')
+                                if np.max(self.M.Gain_information_optimize) >= gain:
+                                    print(
+                                        f'The max entropy is {np.max(self.M.Gain_information_optimize)}, the chosen cluster is {pose_ref}')
+                                    self.N = 5
+                                    self.dz_flag = 0
                                 else:
                                     print(
-                                        f'The DIs_entropy is: {self.M.Dis_var}, The current velocity is: {self.v_pred}')
+                                        f'The max entropy is {gain}, the chosen velocity is {self.v_pred}')
 
                             self.get_logger().info('The weights has update!!')
                             self.get_logger().info(f'len(particles)={len(self.particles)}')
@@ -1315,7 +1356,10 @@ class MinimumJerkPosePlanner(Node):
                                 else:
                                     self.cmd.position.x = self.X[self.n_now] + delta_x / self.freq
                                     self.cmd.position.y = self.Y[self.n_now] + delta_y / self.freq
-                                    self.cmd.position.z = self.Z[self.n_now] + delta_z / self.freq
+                                    if self.N == 1:
+                                        self.cmd.position.z += delta_z / self.freq
+                                    else:
+                                        self.cmd.position.z = self.Z[self.n_now] + delta_z / self.freq
                                     # orientation 可插值或保持初始
                                     self.cmd.orientation.x = self.Q[self.n_now][0]
                                     self.cmd.orientation.y = self.Q[self.n_now][1]
@@ -1407,77 +1451,6 @@ class MinimumJerkPosePlanner(Node):
 
             self.pose_pub.publish(self.cmd)
 
-    # def contact_optimizer(self):
-    #     # ##夹爪先验位置约束
-    #     # if self.k == 1:
-    #     #     self.values[f"g{self.k}"] = geo.V3(0.0, 0.0, 0.0)
-    #     # else:
-    #     #     self.values[f"g{self.k}"] = self.values[f"g{self.k-1}"]
-    #     # def gripper_pose_error(gi: geo.V3) -> geo.V3:
-    #     #     return gi - self.gripper_pose_prior
-    #     # self.factors.append(Factor(keys=[f"g{self.k}"], residual=gripper_pose_error))
-    #     #
-    #     # ##工具位置约束
-    #     # if self.k == 1:
-    #     #     self.values[f"ll{self.k}"] = geo.V3(0.0, 0.0, 0.0)
-    #     #     self.values[f"lr{self.k}"] = geo.V3(0.0, 0.0, 0.0)
-    #     # else:
-    #     #     self.values[f"ll{self.k}"] = self.values[f"ll{self.k - 1}"]
-    #     #     self.values[f"lr{self.k}"] = self.values[f"lr{self.k - 1}"]
-    #     # def tool_pose_error_left(ll: geo.V3) -> geo.V3:
-    #     #     return (self.world_to_gripper_translation * self.gripper_to_sensor_translation * self.sensor_to_tool_translation_left * geo.V4(0, 0, 0, 1))[0:3] - ll
-    #     # self.factors.append(Factor(keys=[f"ll{self.k}"], residual=tool_pose_error_left))
-    #     #
-    #     # def tool_pose_error_right(lr: geo.V3) -> geo.V3:
-    #     #     return (self.world_to_gripper_translation * self.gripper_to_sensor_translation * self.sensor_to_tool_translation_right * geo.V4(0, 0, 0, 1))[0:3] - lr
-    #     # self.factors.append(Factor(keys=[f"lr{self.k}"], residual=tool_pose_error_right))
-    #     #
-    #     # # ##滑动窗口，只取最近N个因子进行优化
-    #     # # if self.i <= self.W:
-    #     # #     self.curr_optimized_values = self.values.copy()
-    #     # #     self.curr_optimized_factors = self.factors.copy()
-    #     # # else:
-    #     # #     for j in range(self.i - self.W, self.i):
-    #     # #         self.curr_optimized_values[f"g{j}"] = self.values[f"g{j}"]
-    #     # #         self.curr_optimized_values[f"l{j}"] = self.values[f"l{j}"]
-    #     #
-    #     #
-    #     # # ---- 优化器参数 ----
-    #     # params = OptimizerParams(verbose=False)
-    #     #
-    #     # # ---- 构建优化器 ----
-    #     # optimizer = Optimizer(
-    #     #     factors=self.factors,
-    #     #     optimized_keys=list(self.values.keys()),
-    #     #     params=params,
-    #     #     debug_stats=True,
-    #     # )
-    #     # result = optimizer.optimize(self.values)
-    #     # self.values = result.optimized_values
-    #     #
-    #     # # 打印当前状态
-    #     # g_curr = self.values[f"g{self.k}"]
-    #     # l_curr_l = self.values[f"ll{self.k}"]
-    #     # l_curr_r = self.values[f"lr{self.k}"]
-    #     # ## 调整插座的位置
-    #     # l_cuur = (l_curr_l + l_curr_r) / 2
-    #     # if self.k % 10 == 0:
-    #     #     self.get_logger().info(f"t={self.k}, g={g_curr}, ll={l_curr_l}, lr={l_curr_r}")
-    #     #     self.get_logger().info(f"l={l_cuur}")
-    #     # self.G.append(np.array(g_curr))
-    #     # self.Ll.append(np.array(l_curr_l))
-    #     # self.Lr.append(np.array(l_curr_r))
-    #     #
-    #     # self.k += 1
-    #
-    #     l_curr_l = (self.world_to_gripper_translation * self.gripper_to_sensor_translation * self.sensor_to_tool_translation_left * geo.V4(0, 0, 0, 1))[0: 3]
-    #     l_curr_r = (self.world_to_gripper_translation * self.gripper_to_sensor_translation * self.sensor_to_tool_translation_right * geo.V4(0, 0, 0, 1))[0: 3]
-    #     l_cuur = (l_curr_l + l_curr_r) / 2
-    #     l_cuur = np.array(l_cuur)
-    #     # if self.i % 10 == 0:
-    #     #     self.get_logger().info(f"l={l_cuur}")
-    #
-    #     return l_cuur
 def to_numpy_float(arr_list):
     return np.array(arr_list, dtype=np.float64)
 
