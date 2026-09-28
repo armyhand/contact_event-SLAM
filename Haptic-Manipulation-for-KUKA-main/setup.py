@@ -29,6 +29,8 @@ setup(
         'ruamel.yaml',
         'opencv-python',
         'h5py',
+        'minimalmodbus',
+        'pyserial',
     ],
     zip_safe=True,
     maintainer='lyj',
@@ -61,7 +63,7 @@ setup(
             'dp_bridge = haptic.dp_bridge:main',  # DP桥接节点（ZMQ客户端-触觉图像）
             'dp_f_bridge = haptic.dp_f_bridge:main',  # DP合力桥接节点（ZMQ客户端-合力数据）
             'mock_data = haptic.mock_data_publisher:main',  # 模拟数据发布器（测试用）
+            'adaptive_gripper = haptic.adaptive_gripper:main',
         ],
     },
 )
-
